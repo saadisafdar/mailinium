@@ -1,0 +1,75 @@
+---
+# Mailinium — clang-format configuration
+# Targets: clang-format 17+
+#
+# Run on the project:
+#   clang-format -i $(find src tests -name "*.h" -o -name "*.cpp")
+BasedOnStyle: Mozilla
+Language: Cpp
+
+# Column limit
+ColumnLimit: 100
+
+# Indentation
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+
+# Access modifiers
+AccessModifierOffset: -4
+
+# Braces
+BreakBeforeBraces: Allman
+BraceWrapping:
+  AfterClass:      true
+  AfterFunction:   true
+  AfterNamespace:  false
+  AfterControlStatement: Always
+  BeforeElse:      true
+  BeforeCatch:     true
+
+# Includes
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Own header (no path) — always first in .cpp
+  - Regex:           '^"[^/]+'
+    Priority:        1
+  # Project headers
+  - Regex:           '^"'
+    Priority:        2
+  # Qt headers
+  - Regex:           '^<Q'
+    Priority:        3
+  # Standard library
+  - Regex:           '^<'
+    Priority:        4
+
+# Spacing
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInAngles: false
+SpacesInContainerLiterals: false
+SpaceAfterTemplateKeyword: true
+
+# Alignment
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignTrailingComments: true
+
+# Pointer alignment
+PointerAlignment: Left
+
+# Empty lines
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+# Short functions / lambdas
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+
+# Constructor initializer lists
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+ConstructorInitializerIndentWidth: 4

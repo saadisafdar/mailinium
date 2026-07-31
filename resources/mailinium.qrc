@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/">
+        <!-- Icons and fonts will be added here as assets are created -->
+        <!-- Example:
+        <file>icons/mailinium.ico</file>
+        <file>fonts/Inter-Regular.ttf</file>
+        -->
+    </qresource>
+</RCC>
