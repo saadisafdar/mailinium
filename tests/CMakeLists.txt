@@ -3,8 +3,6 @@
 # Unit test suite using Qt Test (QTest) + CTest.
 # =============================================================================
 
-enable_testing()
-
 # ---------------------------------------------------------------------------
 # Helper macro: declare a test executable
 # Usage: mailinium_add_test(NAME TestFoo SOURCES foo_test.cpp)
@@ -25,6 +23,7 @@ macro(mailinium_add_test)
     )
 
     mailinium_set_target_options(${ARG_NAME})
+    mailinium_deploy_qt_executable(${ARG_NAME})
 
     add_test(NAME ${ARG_NAME} COMMAND ${ARG_NAME})
 endmacro()
@@ -33,6 +32,6 @@ endmacro()
 # Test subdirectories — added as modules are implemented
 # ---------------------------------------------------------------------------
 # add_subdirectory(core)
-# add_subdirectory(storage)
+add_subdirectory(storage)
 # add_subdirectory(protocols)
 # add_subdirectory(sync)

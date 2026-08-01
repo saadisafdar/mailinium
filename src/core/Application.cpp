@@ -2,6 +2,7 @@
 #include "Logger.h"
 #include "Settings.h"
 #include "ThemeManager.h"
+#include "../storage/Database.h"
 #include "../ui/MainWindow.h"
 
 #include <QStandardPaths>
@@ -57,6 +58,13 @@ void Application::initializeCore()
     Settings::instance().initialize(dataDir);
     Logger::instance().info(QStringLiteral("core"), QStringLiteral("Settings loaded"));
 
+    const QString dbPath = dataDir + QStringLiteral("/mailinium.db");
+    if (!Database::instance().open(dbPath)) {
+        Logger::instance().critical(QStringLiteral("core"),
+            QStringLiteral("Failed to open database — storage is unavailable"));
+        // Continue without storage for now; Phase 3B will surface this to the user.
+    }
+
     ThemeManager::instance().initialize();
     Logger::instance().info(QStringLiteral("core"), QStringLiteral("Theme applied"));
 }
@@ -79,6 +87,7 @@ void Application::initializeUi()
 void Application::onAboutToQuit()
 {
     Logger::instance().info(QStringLiteral("core"), QStringLiteral("Mailinium shutting down"));
+    Database::instance().close();
     Settings::instance().sync();
     Logger::instance().flush();
 }

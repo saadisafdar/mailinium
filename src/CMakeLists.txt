@@ -34,6 +34,15 @@ set(MAILINIUM_SOURCES
     ui/MessageViewPanel.cpp
     ui/SettingsDialog.h
     ui/SettingsDialog.cpp
+    # storage/
+    storage/Folder.h
+    storage/Message.h
+    storage/Database.h
+    storage/Database.cpp
+    storage/FolderStore.h
+    storage/FolderStore.cpp
+    storage/MessageStore.h
+    storage/MessageStore.cpp
 )
 
 set(MAILINIUM_RESOURCES
@@ -88,14 +97,4 @@ mailinium_set_target_options(Mailinium)
 # Windows: Qt deployment helper
 # Copies Qt DLLs next to the executable after build (debug only)
 # ---------------------------------------------------------------------------
-if(WIN32)
-    add_custom_command(TARGET Mailinium POST_BUILD
-        COMMAND "${Qt6_DIR}/../../../bin/windeployqt.exe"
-            --no-translations
-            --no-system-d3d-compiler
-            --no-opengl-sw
-            "$<TARGET_FILE:Mailinium>"
-        COMMENT "Running windeployqt..."
-        VERBATIM
-    )
-endif()
+mailinium_deploy_qt_executable(Mailinium)
