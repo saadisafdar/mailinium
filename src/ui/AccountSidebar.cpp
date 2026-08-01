@@ -1,5 +1,6 @@
 #include "AccountSidebar.h"
 #include "../core/ThemeManager.h"
+#include "../storage/AccountStore.h"
 
 #include <QApplication>
 #include <QFrame>
@@ -106,6 +107,28 @@ void AccountSidebar::setupUi()
     m_folderTree->setIndentation(16);
     m_folderTree->setRootIsDecorated(false);
     layout->addWidget(m_folderTree, 1); // stretch — takes remaining height
+
+    loadAccounts();
+}
+
+void AccountSidebar::loadAccounts()
+{
+    m_accountList->clear();
+
+    AccountStore store;
+    const auto accounts = store.allAccounts();
+
+    if (accounts.isEmpty()) {
+        m_accountList->hide();
+        m_emptyHint->show();
+    } else {
+        m_emptyHint->hide();
+        m_accountList->show();
+        for (const Account& acc : accounts) {
+            auto* item = new QListWidgetItem(acc.email, m_accountList);
+            item->setData(Qt::UserRole, acc.id);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

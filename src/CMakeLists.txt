@@ -28,6 +28,8 @@ set(MAILINIUM_SOURCES
     ui/MainWindow.cpp
     ui/AccountSidebar.h
     ui/AccountSidebar.cpp
+    ui/AccountSetupWizard.h
+    ui/AccountSetupWizard.cpp
     ui/MessageListPanel.h
     ui/MessageListPanel.cpp
     ui/MessageViewPanel.h
@@ -39,6 +41,9 @@ set(MAILINIUM_SOURCES
     storage/Message.h
     storage/Database.h
     storage/Database.cpp
+    storage/Account.h
+    storage/AccountStore.h
+    storage/AccountStore.cpp
     storage/FolderStore.h
     storage/FolderStore.cpp
     storage/MessageStore.h

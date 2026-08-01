@@ -27,6 +27,8 @@ public:
     explicit AccountSidebar(QWidget* parent = nullptr);
     ~AccountSidebar() override;
 
+    void loadAccounts();
+
 public slots:
     void onThemeChanged(bool dark);
 

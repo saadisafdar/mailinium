@@ -52,6 +52,7 @@ protected:
 
 private slots:
     void onNewMessage();
+    void onAddAccount();
     void onSettings();
     void onAbout();
 

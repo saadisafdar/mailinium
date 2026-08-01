@@ -6,18 +6,23 @@
 #include "../core/Logger.h"
 #include "../core/Settings.h"
 #include "../core/ThemeManager.h"
+#include "AccountSetupWizard.h"
+#include "../storage/AccountStore.h"
 
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDockWidget>
+#include <QKeySequence>
 #include <QLabel>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QScreen>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTimer>
 #include <QToolBar>
 
 // ---------------------------------------------------------------------------
@@ -42,6 +47,14 @@ MainWindow::MainWindow(QWidget* parent)
     // Restore saved geometry. Must come after setupLayout() so the dock widget
     // and splitter exist before we attempt to restore their state.
     restoreWindowState();
+
+    // Check if we need to show the wizard on first run
+    QTimer::singleShot(0, this, [this]() {
+        AccountStore store;
+        if (store.accountCount() == 0) {
+            onAddAccount();
+        }
+    });
 }
 
 MainWindow::~MainWindow() = default;
@@ -59,9 +72,10 @@ void MainWindow::setupActions()
     m_actNewMessage->setStatusTip(tr("Compose a new email message"));
 
     m_actAddAccount = new QAction(tr("Add Account..."), this);
+    connect(m_actAddAccount, &QAction::triggered, this, &MainWindow::onAddAccount);
     m_actAddAccount->setStatusTip(tr("Connect a new email account"));
 
-    m_actSettings = new QAction(tr("Settings"), this);
+    m_actSettings = new QAction(tr("Settings..."), this);
     m_actSettings->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma));
     m_actSettings->setStatusTip(tr("Open application settings"));
     m_actSettings->setMenuRole(QAction::PreferencesRole); // macOS Preferences menu
@@ -328,10 +342,6 @@ void MainWindow::connectSignals()
 
     // File actions
     connect(m_actNewMessage, &QAction::triggered, this, &MainWindow::onNewMessage);
-    connect(m_actAddAccount, &QAction::triggered, this, [this] {
-        // Phase 3B: AccountSetupWizard
-        Logger::instance().info(QStringLiteral("ui"), QStringLiteral("Add account requested"));
-    });
     connect(m_actSettings, &QAction::triggered, this, &MainWindow::onSettings);
     connect(m_actQuit,     &QAction::triggered, qApp,  &QApplication::quit);
 
@@ -407,7 +417,19 @@ void MainWindow::restoreWindowState()
 void MainWindow::onNewMessage()
 {
     Logger::instance().info(QStringLiteral("ui"), QStringLiteral("New message requested"));
-    // Phase 3F: open ComposeWindow
+    // Future: open composer window
+    showStatusMessage(QStringLiteral("New message triggered"), 2000);
+}
+
+void MainWindow::onAddAccount()
+{
+    AccountSetupWizard wizard(this);
+    if (wizard.exec() == QDialog::Accepted) {
+        if (m_sidebar) {
+            m_sidebar->loadAccounts();
+        }
+        showStatusMessage(QStringLiteral("Account added successfully"), 3000);
+    }
 }
 
 void MainWindow::onSettings()
