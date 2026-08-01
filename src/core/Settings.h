@@ -68,6 +68,8 @@ public:
     // Must be called before any value() or setValue() calls.
     void initialize(const QString& dataDir);
 
+    ~Settings();
+
     QVariant value(Key key) const;
     void     setValue(Key key, const QVariant& value);
 

@@ -1,5 +1,6 @@
 #include "MessageListPanel.h"
 
+#include <QApplication>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -65,7 +66,7 @@ void MessageListPanel::setupUi()
     {
         QPalette p = m_placeholderMsg->palette();
         p.setColor(QPalette::WindowText,
-                   qApp->palette().color(QPalette::Disabled, QPalette::WindowText));
+                   QApplication::palette().color(QPalette::Disabled, QPalette::WindowText));
         m_placeholderMsg->setPalette(p);
         QFont f = m_placeholderMsg->font();
         f.setPointSizeF(f.pointSizeF() * 0.92);

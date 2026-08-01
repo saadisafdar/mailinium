@@ -1,6 +1,7 @@
 #include "AccountSidebar.h"
 #include "../core/ThemeManager.h"
 
+#include <QApplication>
 #include <QFrame>
 #include <QLabel>
 #include <QListWidget>
@@ -49,7 +50,7 @@ void AccountSidebar::setupUi()
     // Use the disabled text color as a subtle header color
     QPalette headerPal = m_accountsHeader->palette();
     headerPal.setColor(QPalette::WindowText,
-                       qApp->palette().color(QPalette::Disabled, QPalette::WindowText));
+                       QApplication::palette().color(QPalette::Disabled, QPalette::WindowText));
     m_accountsHeader->setPalette(headerPal);
     layout->addWidget(m_accountsHeader);
 
@@ -73,7 +74,7 @@ void AccountSidebar::setupUi()
     }
     QPalette hintPal = m_emptyHint->palette();
     hintPal.setColor(QPalette::WindowText,
-                     qApp->palette().color(QPalette::Disabled, QPalette::WindowText));
+                     QApplication::palette().color(QPalette::Disabled, QPalette::WindowText));
     m_emptyHint->setPalette(hintPal);
     layout->addWidget(m_emptyHint);
 
@@ -115,13 +116,20 @@ void AccountSidebar::onThemeChanged(bool dark)
 {
     applyBackground(dark);
 
-    // Re-apply the subtle header color using the updated palette
-    const QColor subtleColor = qApp->palette().color(QPalette::Disabled, QPalette::WindowText);
-    QPalette p;
-    p.setColor(QPalette::WindowText, subtleColor);
-    m_accountsHeader->setPalette(p);
-    m_foldersHeader->setPalette(p);
-    m_emptyHint->setPalette(p);
+    // Re-apply the subtle header color using the freshly updated application palette.
+    // Each widget's palette is derived from itself so all other roles stay correct.
+    const QColor subtleColor =
+        QApplication::palette().color(QPalette::Disabled, QPalette::WindowText);
+
+    auto applySubtle = [&subtleColor](QLabel* label) {
+        QPalette p = label->palette();
+        p.setColor(QPalette::WindowText, subtleColor);
+        label->setPalette(p);
+    };
+
+    applySubtle(m_accountsHeader);
+    applySubtle(m_foldersHeader);
+    applySubtle(m_emptyHint);
 }
 
 void AccountSidebar::applyBackground(bool dark)
@@ -131,7 +139,7 @@ void AccountSidebar::applyBackground(bool dark)
     const QColor bg = dark ? QColor(37, 37, 38)    // #252526 — VSCode sidebar
                            : QColor(240, 240, 240); // slightly darker than white
 
-    QPalette pal = qApp->palette();
+    QPalette pal = QApplication::palette();
     pal.setColor(QPalette::Window, bg);
     pal.setColor(QPalette::Base,   bg);
 

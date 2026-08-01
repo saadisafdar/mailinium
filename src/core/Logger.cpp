@@ -3,7 +3,6 @@
 #include <QDateTime>
 #include <QDir>
 #include <QThread>
-#include <QFileInfo>
 
 // ---------------------------------------------------------------------------
 // Singleton
@@ -41,7 +40,11 @@ void Logger::initialize(const QString& logDir, Level minLevel)
     m_minLevel = minLevel;
 
     QDir dir;
-    dir.mkpath(logDir);
+    if (!dir.mkpath(logDir)) {
+        // Cannot create log directory. Log to stderr and carry on —
+        // subsequent file opens will fail gracefully.
+        QTextStream(stderr) << "Mailinium: could not create log directory: " << logDir << "\n";
+    }
 
     openLogFile();
     m_initialized = true;
@@ -56,7 +59,15 @@ void Logger::openLogFile()
     }
 
     m_file.setFileName(currentLogPath());
-    m_file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+
+    // open() returns bool; we check it and fall back to stderr on failure.
+    if (!m_file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        QTextStream(stderr) << "Mailinium: could not open log file: "
+                            << currentLogPath() << "\n";
+        m_stream.setDevice(nullptr);
+        return;
+    }
+
     m_stream.setDevice(&m_file);
 }
 
@@ -90,15 +101,13 @@ void Logger::log(Level level, const QString& module, const QString& message)
 
     if (!m_initialized) {
         // Fallback: write to stderr before initialization completes
-        QTextStream err(stderr);
-        err << levelString(level) << " [" << module << "] " << message << "\n";
+        QTextStream(stderr) << levelString(level) << " [" << module << "] " << message << "\n";
         return;
     }
 
     rotateIfNeeded();
 
     const QString timestamp = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
-    // Represent thread ID as a hex value for brevity
     const quintptr threadId = reinterpret_cast<quintptr>(QThread::currentThread());
 
     m_stream << "[" << timestamp << "]"
@@ -108,10 +117,8 @@ void Logger::log(Level level, const QString& module, const QString& message)
              << message
              << "\n";
 
-    // Debug builds also echo to stderr
 #ifdef MAILINIUM_DEBUG
-    QTextStream err(stderr);
-    err << "[" << levelString(level) << "] [" << module << "] " << message << "\n";
+    QTextStream(stderr) << "[" << levelString(level) << "] [" << module << "] " << message << "\n";
 #endif
 }
 
@@ -128,8 +135,11 @@ void Logger::rotateIfNeeded()
     m_currentFileIndex = (m_currentFileIndex + 1) % MaxFiles;
     openLogFile();
 
-    // Truncate the new file (it may be a recycled old log)
-    m_file.resize(0);
+    // Truncate the recycled log file. resize() returns bool — checked here.
+    if (m_file.isOpen() && !m_file.resize(0)) {
+        // Non-fatal: the file will just keep old content until overwritten.
+        QTextStream(stderr) << "Mailinium: could not truncate log file\n";
+    }
 }
 
 // ---------------------------------------------------------------------------

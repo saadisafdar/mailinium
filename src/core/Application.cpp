@@ -94,6 +94,8 @@ QString Application::dataDirectory() const
     //   macOS:   ~/Library/Application Support/Mailinium
     //   Linux:   ~/.local/share/mailinium
     const QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(path);
+    if (!QDir().mkpath(path)) {
+        qWarning("Mailinium: could not create data directory: %ls", qUtf16Printable(path));
+    }
     return path;
 }

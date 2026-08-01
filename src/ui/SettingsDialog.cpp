@@ -2,6 +2,7 @@
 #include "../core/Settings.h"
 #include "../core/ThemeManager.h"
 
+#include <QApplication>
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -149,7 +150,7 @@ QWidget* SettingsDialog::buildGeneralTab()
     {
         QPalette p = privacyNote->palette();
         p.setColor(QPalette::WindowText,
-                   qApp->palette().color(QPalette::Disabled, QPalette::WindowText));
+                   QApplication::palette().color(QPalette::Disabled, QPalette::WindowText));
         privacyNote->setPalette(p);
         QFont f = privacyNote->font();
         f.setPointSizeF(f.pointSizeF() * 0.88);
@@ -182,7 +183,7 @@ QWidget* SettingsDialog::buildAccountsTab()
     {
         QPalette p = note->palette();
         p.setColor(QPalette::WindowText,
-                   qApp->palette().color(QPalette::Disabled, QPalette::WindowText));
+                   QApplication::palette().color(QPalette::Disabled, QPalette::WindowText));
         note->setPalette(p);
     }
     layout->addWidget(note, 1, Qt::AlignCenter);
@@ -228,7 +229,7 @@ QWidget* SettingsDialog::buildAdvancedTab()
     {
         QPalette p = logNote->palette();
         p.setColor(QPalette::WindowText,
-                   qApp->palette().color(QPalette::Disabled, QPalette::WindowText));
+                   QApplication::palette().color(QPalette::Disabled, QPalette::WindowText));
         logNote->setPalette(p);
         QFont f = logNote->font();
         f.setPointSizeF(f.pointSizeF() * 0.88);
