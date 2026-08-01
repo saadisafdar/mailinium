@@ -52,6 +52,7 @@ private slots:
 private:
     QLineEdit* m_emailEdit = nullptr;
     QLineEdit* m_displayNameEdit = nullptr;
+    QLineEdit* m_passwordEdit = nullptr;
 };
 
 class ServerSettingsPage : public QWizardPage

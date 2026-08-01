@@ -22,6 +22,10 @@ set(MAILINIUM_SOURCES
     core/Settings.cpp
     core/ThemeManager.h
     core/ThemeManager.cpp
+    core/SyncManager.h
+    core/SyncManager.cpp
+    core/SyncWorker.h
+    core/SyncWorker.cpp
 
     # ui/
     ui/MainWindow.h
@@ -36,6 +40,11 @@ set(MAILINIUM_SOURCES
     ui/MessageViewPanel.cpp
     ui/SettingsDialog.h
     ui/SettingsDialog.cpp
+    
+    # network/
+    network/ImapClient.h
+    network/ImapClient.cpp
+    
     # storage/
     storage/Folder.h
     storage/Message.h

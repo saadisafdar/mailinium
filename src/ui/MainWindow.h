@@ -46,6 +46,8 @@ public:
 
 public slots:
     void onThemeChanged(bool dark);
+    void onSyncStatusChanged(qint64 accountId, const QString& status);
+    void onFoldersUpdated(qint64 accountId);
 
 protected:
     void closeEvent(QCloseEvent* event) override;

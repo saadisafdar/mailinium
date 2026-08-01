@@ -15,12 +15,13 @@ qint64 AccountStore::insertAccount(Account& account)
 
     QSqlQuery q(Database::connection());
     q.prepare(QStringLiteral(
-        "INSERT INTO accounts (email, display_name, provider, imap_host, imap_port, smtp_host, smtp_port, created_at) "
-        "VALUES (:email, :display_name, :provider, :imap_host, :imap_port, :smtp_host, :smtp_port, :created_at)"
+        "INSERT INTO accounts (email, display_name, password, provider, imap_host, imap_port, smtp_host, smtp_port, created_at) "
+        "VALUES (:email, :display_name, :password, :provider, :imap_host, :imap_port, :smtp_host, :smtp_port, :created_at)"
     ));
 
     q.bindValue(QStringLiteral(":email"), account.email);
     q.bindValue(QStringLiteral(":display_name"), account.displayName);
+    q.bindValue(QStringLiteral(":password"), account.password);
     q.bindValue(QStringLiteral(":provider"), account.provider);
     q.bindValue(QStringLiteral(":imap_host"), account.imapHost);
     q.bindValue(QStringLiteral(":imap_port"), account.imapPort);
@@ -44,6 +45,7 @@ bool AccountStore::updateAccount(const Account& account)
         "UPDATE accounts SET "
         "email = :email, "
         "display_name = :display_name, "
+        "password = :password, "
         "provider = :provider, "
         "imap_host = :imap_host, "
         "imap_port = :imap_port, "
@@ -54,6 +56,7 @@ bool AccountStore::updateAccount(const Account& account)
 
     q.bindValue(QStringLiteral(":email"), account.email);
     q.bindValue(QStringLiteral(":display_name"), account.displayName);
+    q.bindValue(QStringLiteral(":password"), account.password);
     q.bindValue(QStringLiteral(":provider"), account.provider);
     q.bindValue(QStringLiteral(":imap_host"), account.imapHost);
     q.bindValue(QStringLiteral(":imap_port"), account.imapPort);
@@ -87,7 +90,7 @@ std::optional<Account> AccountStore::accountById(qint64 id) const
 {
     QSqlQuery q(Database::connection());
     q.prepare(QStringLiteral(
-        "SELECT id, email, display_name, provider, imap_host, imap_port, smtp_host, smtp_port, created_at "
+        "SELECT id, email, display_name, password, provider, imap_host, imap_port, smtp_host, smtp_port, created_at "
         "FROM accounts WHERE id = :id"
     ));
     q.bindValue(QStringLiteral(":id"), id);
@@ -100,12 +103,13 @@ std::optional<Account> AccountStore::accountById(qint64 id) const
     acc.id          = q.value(0).toLongLong();
     acc.email       = q.value(1).toString();
     acc.displayName = q.value(2).toString();
-    acc.provider    = q.value(3).toString();
-    acc.imapHost    = q.value(4).toString();
-    acc.imapPort    = q.value(5).toInt();
-    acc.smtpHost    = q.value(6).toString();
-    acc.smtpPort    = q.value(7).toInt();
-    acc.createdAt   = QDateTime::fromString(q.value(8).toString(), Qt::ISODate);
+    acc.password    = q.value(3).toString();
+    acc.provider    = q.value(4).toString();
+    acc.imapHost    = q.value(5).toString();
+    acc.imapPort    = q.value(6).toInt();
+    acc.smtpHost    = q.value(7).toString();
+    acc.smtpPort    = q.value(8).toInt();
+    acc.createdAt   = QDateTime::fromString(q.value(9).toString(), Qt::ISODate);
     acc.createdAt.setTimeZone(QTimeZone::UTC);
 
     return acc;
@@ -118,7 +122,7 @@ QList<Account> AccountStore::allAccounts() const
     
     // Ordered by ID for consistent display order
     q.prepare(QStringLiteral(
-        "SELECT id, email, display_name, provider, imap_host, imap_port, smtp_host, smtp_port, created_at "
+        "SELECT id, email, display_name, password, provider, imap_host, imap_port, smtp_host, smtp_port, created_at "
         "FROM accounts ORDER BY id ASC"
     ));
 
@@ -132,12 +136,13 @@ QList<Account> AccountStore::allAccounts() const
         acc.id          = q.value(0).toLongLong();
         acc.email       = q.value(1).toString();
         acc.displayName = q.value(2).toString();
-        acc.provider    = q.value(3).toString();
-        acc.imapHost    = q.value(4).toString();
-        acc.imapPort    = q.value(5).toInt();
-        acc.smtpHost    = q.value(6).toString();
-        acc.smtpPort    = q.value(7).toInt();
-        acc.createdAt   = QDateTime::fromString(q.value(8).toString(), Qt::ISODate);
+        acc.password    = q.value(3).toString();
+        acc.provider    = q.value(4).toString();
+        acc.imapHost    = q.value(5).toString();
+        acc.imapPort    = q.value(6).toInt();
+        acc.smtpHost    = q.value(7).toString();
+        acc.smtpPort    = q.value(8).toInt();
+        acc.createdAt   = QDateTime::fromString(q.value(9).toString(), Qt::ISODate);
         acc.createdAt.setTimeZone(QTimeZone::UTC);
 
         results.append(acc);

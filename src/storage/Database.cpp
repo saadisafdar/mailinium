@@ -306,6 +306,21 @@ bool Database::runMigrations()
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Migration 2 — Add password to accounts
+    // -----------------------------------------------------------------------
+    if (current < 2) {
+        const QStringList statements = {
+            QStringLiteral(
+                "ALTER TABLE accounts ADD COLUMN password TEXT NOT NULL DEFAULT ''"
+            )
+        };
+
+        if (!runMigration(2, QStringLiteral("Add password to accounts"), statements)) {
+            return false;
+        }
+    }
+
     // Future migrations: add new `if (current < N)` blocks here.
     // Never modify a migration that has already been applied.
 

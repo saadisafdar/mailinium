@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include <QMessageBox>
 #include "AccountSidebar.h"
 #include "MessageListPanel.h"
 #include "MessageViewPanel.h"
@@ -6,6 +7,7 @@
 #include "../core/Logger.h"
 #include "../core/Settings.h"
 #include "../core/ThemeManager.h"
+#include "../core/SyncManager.h"
 #include "AccountSetupWizard.h"
 #include "../storage/AccountStore.h"
 
@@ -53,6 +55,8 @@ MainWindow::MainWindow(QWidget* parent)
         AccountStore store;
         if (store.accountCount() == 0) {
             onAddAccount();
+        } else {
+            SyncManager::instance().startAll();
         }
     });
 }
@@ -371,6 +375,12 @@ void MainWindow::connectSignals()
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &MainWindow::onThemeChanged);
 
+    // Sync Manager
+    connect(&SyncManager::instance(), &SyncManager::syncStatusChanged,
+            this, &MainWindow::onSyncStatusChanged);
+    connect(&SyncManager::instance(), &SyncManager::foldersUpdated,
+            this, &MainWindow::onFoldersUpdated);
+
     // Help
     connect(m_actAbout, &QAction::triggered, this, &MainWindow::onAbout);
 }
@@ -414,6 +424,25 @@ void MainWindow::restoreWindowState()
 // Slots
 // ---------------------------------------------------------------------------
 
+void MainWindow::onSyncStatusChanged(qint64 accountId, const QString& status)
+{
+    showStatusMessage(QStringLiteral("Sync: ") + status);
+    
+    // If it's a login failure or error, show a message box so the user actually sees it!
+    if (status.contains(QStringLiteral("failed"), Qt::CaseInsensitive) || 
+        status.contains(QStringLiteral("Error"), Qt::CaseInsensitive)) {
+        QMessageBox::warning(this, tr("Synchronization Error"), 
+                             tr("Account ID %1 encountered an error:\n%2").arg(accountId).arg(status));
+    }
+}
+
+void MainWindow::onFoldersUpdated(qint64 accountId)
+{
+    Q_UNUSED(accountId);
+    // Sidebar updates automatically, but we can log here
+    Logger::instance().info(QStringLiteral("ui"), QStringLiteral("MainWindow received folders update for account ") + QString::number(accountId));
+}
+
 void MainWindow::onNewMessage()
 {
     Logger::instance().info(QStringLiteral("ui"), QStringLiteral("New message requested"));
@@ -428,6 +457,16 @@ void MainWindow::onAddAccount()
         if (m_sidebar) {
             m_sidebar->loadAccounts();
         }
+        
+        AccountStore store;
+        auto acc = store.accountById(wizard.createdAccountId());
+        if (acc.has_value()) {
+            Logger::instance().info(QStringLiteral("ui"), QStringLiteral("Adding newly created account to SyncManager: ") + acc.value().email);
+            SyncManager::instance().addAccount(acc.value());
+        } else {
+            Logger::instance().error(QStringLiteral("ui"), QStringLiteral("Failed to fetch newly created account ID: ") + QString::number(wizard.createdAccountId()));
+        }
+        
         showStatusMessage(QStringLiteral("Account added successfully"), 3000);
     }
 }

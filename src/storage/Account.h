@@ -11,6 +11,7 @@ struct Account {
     qint64    id = -1;
     QString   email = QStringLiteral("");
     QString   displayName = QStringLiteral("");
+    QString   password = QStringLiteral("");
     QString   provider = QStringLiteral("");
     QString   imapHost = QStringLiteral("");
     int       imapPort = 993;

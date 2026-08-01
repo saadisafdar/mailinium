@@ -42,6 +42,7 @@ private slots:
         Account acc;
         acc.email       = QStringLiteral("test1@example.com");
         acc.displayName = QStringLiteral("Test User 1");
+        acc.password    = QStringLiteral("secret123");
         acc.provider    = QStringLiteral("Custom");
         acc.imapHost    = QStringLiteral("imap.example.com");
         acc.imapPort    = 993;
@@ -75,6 +76,7 @@ private slots:
 
         acc.email       = QStringLiteral("update_after@example.com");
         acc.displayName = QStringLiteral("Updated User");
+        acc.password    = QStringLiteral("new_secret");
         acc.imapPort    = 143;
 
         QVERIFY(m_store.updateAccount(acc));
@@ -83,6 +85,7 @@ private slots:
         QVERIFY(fetched.has_value());
         QCOMPARE(fetched->email, QStringLiteral("update_after@example.com"));
         QCOMPARE(fetched->displayName, QStringLiteral("Updated User"));
+        QCOMPARE(fetched->password, QStringLiteral("new_secret"));
         QCOMPARE(fetched->imapPort, 143);
     }
 

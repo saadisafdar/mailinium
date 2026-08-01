@@ -1,6 +1,9 @@
 #include "AccountSidebar.h"
 #include "../core/ThemeManager.h"
+#include "../core/SyncManager.h"
 #include "../storage/AccountStore.h"
+#include "../storage/FolderStore.h"
+#include "../core/Logger.h"
 
 #include <QApplication>
 #include <QFrame>
@@ -21,6 +24,9 @@ AccountSidebar::AccountSidebar(QWidget* parent)
 
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &AccountSidebar::onThemeChanged);
+            
+    connect(&SyncManager::instance(), &SyncManager::foldersUpdated,
+            this, &AccountSidebar::onFoldersUpdated);
 }
 
 AccountSidebar::~AccountSidebar() = default;
@@ -61,6 +67,10 @@ void AccountSidebar::setupUi()
     m_accountList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_accountList->setMaximumHeight(150); // grows up to ~4 accounts
     m_accountList->setSpacing(1);
+    
+    connect(m_accountList, &QListWidget::itemSelectionChanged, 
+            this, &AccountSidebar::onAccountSelected);
+            
     layout->addWidget(m_accountList);
 
     // -- Empty state hint (shown while account list has no items) -------------
@@ -127,6 +137,44 @@ void AccountSidebar::loadAccounts()
         for (const Account& acc : accounts) {
             auto* item = new QListWidgetItem(acc.email, m_accountList);
             item->setData(Qt::UserRole, acc.id);
+        }
+        
+        if (m_accountList->count() > 0) {
+            m_accountList->setCurrentRow(0);
+        }
+    }
+}
+
+void AccountSidebar::onAccountSelected()
+{
+    m_folderTree->clear();
+    
+    auto items = m_accountList->selectedItems();
+    if (items.isEmpty()) {
+        return;
+    }
+    
+    qint64 accountId = items.first()->data(Qt::UserRole).toLongLong();
+    
+    FolderStore store;
+    QList<Folder> folders = store.foldersForAccount(accountId);
+    Logger::instance().info(QStringLiteral("ui"), QStringLiteral("Sidebar loading ") + QString::number(folders.size()) + " folders for account " + QString::number(accountId));
+    
+    for (const Folder& f : folders) {
+        auto* item = new QTreeWidgetItem(m_folderTree);
+        item->setText(0, f.name);
+        item->setData(0, Qt::UserRole, f.id);
+    }
+}
+
+void AccountSidebar::onFoldersUpdated(qint64 accountId)
+{
+    Logger::instance().info(QStringLiteral("ui"), QStringLiteral("Sidebar received foldersUpdated for account ") + QString::number(accountId));
+    auto items = m_accountList->selectedItems();
+    if (!items.isEmpty()) {
+        qint64 selectedId = items.first()->data(Qt::UserRole).toLongLong();
+        if (selectedId == accountId) {
+            onAccountSelected(); // Reload folders for this account
         }
     }
 }

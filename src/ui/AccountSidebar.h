@@ -31,6 +31,10 @@ public:
 
 public slots:
     void onThemeChanged(bool dark);
+    void onFoldersUpdated(qint64 accountId);
+
+private slots:
+    void onAccountSelected();
 
 private:
     void setupUi();

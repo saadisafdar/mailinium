@@ -40,6 +40,7 @@ void AccountSetupWizard::accept()
     Account acc;
     acc.email       = field(QStringLiteral("email")).toString().trimmed();
     acc.displayName = field(QStringLiteral("displayName")).toString().trimmed();
+    acc.password    = field(QStringLiteral("password")).toString();
     acc.imapHost    = field(QStringLiteral("imapHost")).toString().trimmed();
     acc.imapPort    = field(QStringLiteral("imapPort")).toInt();
     acc.smtpHost    = field(QStringLiteral("smtpHost")).toString().trimmed();
@@ -80,20 +81,27 @@ AccountDetailsPage::AccountDetailsPage(QWidget* parent)
     m_displayNameEdit = new QLineEdit(this);
     m_displayNameEdit->setPlaceholderText(tr("Your Name"));
 
+    m_passwordEdit = new QLineEdit(this);
+    m_passwordEdit->setEchoMode(QLineEdit::Password);
+    m_passwordEdit->setPlaceholderText(tr("Password"));
+
     // Register fields so QWizard can store/retrieve their values
     registerField(QStringLiteral("email*"), m_emailEdit); // * means required
     registerField(QStringLiteral("displayName"), m_displayNameEdit);
+    registerField(QStringLiteral("password*"), m_passwordEdit);
 
     QFormLayout* layout = new QFormLayout(this);
     layout->addRow(tr("&Email Address:"), m_emailEdit);
     layout->addRow(tr("&Display Name:"), m_displayNameEdit);
+    layout->addRow(tr("&Password:"), m_passwordEdit);
 
     connect(m_emailEdit, &QLineEdit::textChanged, this, &AccountDetailsPage::onFieldChanged);
+    connect(m_passwordEdit, &QLineEdit::textChanged, this, &AccountDetailsPage::onFieldChanged);
 }
 
 bool AccountDetailsPage::isComplete() const
 {
-    return !m_emailEdit->text().trimmed().isEmpty();
+    return !m_emailEdit->text().trimmed().isEmpty() && !m_passwordEdit->text().isEmpty();
 }
 
 void AccountDetailsPage::onFieldChanged()
