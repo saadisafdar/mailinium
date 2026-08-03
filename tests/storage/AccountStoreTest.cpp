@@ -52,6 +52,11 @@ private slots:
         const qint64 id = m_store.insertAccount(acc);
         QVERIFY(id > 0);
         QVERIFY(acc.id == id);
+        
+        QCOMPARE(acc.authType, AuthType::Password);
+        QCOMPARE(acc.accessToken, QStringLiteral(""));
+        QCOMPARE(acc.refreshToken, QStringLiteral(""));
+        QVERIFY(!acc.tokenExpiry.isValid());
     }
 
     void insertAccount_setsCreatedAt()
@@ -74,19 +79,21 @@ private slots:
         const qint64 id = m_store.insertAccount(acc);
         QVERIFY(id > 0);
 
-        acc.email       = QStringLiteral("update_after@example.com");
-        acc.displayName = QStringLiteral("Updated User");
-        acc.password    = QStringLiteral("new_secret");
-        acc.imapPort    = 143;
+        acc.email       = QStringLiteral("updated@example.com");
+        acc.displayName = QStringLiteral("Updated Name");
+        acc.password    = QStringLiteral("newpassword");
+        acc.authType    = AuthType::OAuth2;
+        acc.accessToken = QStringLiteral("new_access");
 
         QVERIFY(m_store.updateAccount(acc));
 
         const auto fetched = m_store.accountById(id);
         QVERIFY(fetched.has_value());
-        QCOMPARE(fetched->email, QStringLiteral("update_after@example.com"));
-        QCOMPARE(fetched->displayName, QStringLiteral("Updated User"));
-        QCOMPARE(fetched->password, QStringLiteral("new_secret"));
-        QCOMPARE(fetched->imapPort, 143);
+        QCOMPARE(fetched->email, QStringLiteral("updated@example.com"));
+        QCOMPARE(fetched->displayName, QStringLiteral("Updated Name"));
+        QCOMPARE(fetched->password, QStringLiteral("newpassword"));
+        QCOMPARE(fetched->authType, AuthType::OAuth2);
+        QCOMPARE(fetched->accessToken, QStringLiteral("new_access"));
     }
 
     void updateAccount_missingIdReturnsFalse()
@@ -121,22 +128,34 @@ private slots:
 
     void allAccounts_returnsAllInOrder()
     {
-        Account acc1, acc2, acc3;
-        acc1.email = QStringLiteral("a1@example.com");
-        acc2.email = QStringLiteral("a2@example.com");
-        acc3.email = QStringLiteral("a3@example.com");
+        Account acc1;
+        acc1.email = QStringLiteral("test1@example.com");
+        acc1.authType = AuthType::Password;
+        qint64 id1 = m_store.insertAccount(acc1);
 
-        m_store.insertAccount(acc1);
-        m_store.insertAccount(acc2);
-        m_store.insertAccount(acc3);
+        Account acc2;
+        acc2.email = QStringLiteral("oauth@example.com");
+        acc2.authType = AuthType::OAuth2;
+        acc2.accessToken = QStringLiteral("access_123");
+        acc2.refreshToken = QStringLiteral("refresh_456");
+        acc2.tokenExpiry = QDateTime::currentDateTimeUtc().addSecs(3600);
+        qint64 id2 = m_store.insertAccount(acc2);
 
-        QCOMPARE(m_store.accountCount(), 3);
+        QCOMPARE(m_store.accountCount(), 2);
 
-        const QList<Account> all = m_store.allAccounts();
-        QCOMPARE(all.size(), 3);
-        QCOMPARE(all[0].email, QStringLiteral("a1@example.com"));
-        QCOMPARE(all[1].email, QStringLiteral("a2@example.com"));
-        QCOMPARE(all[2].email, QStringLiteral("a3@example.com"));
+        const QList<Account> accounts = m_store.allAccounts();
+        QCOMPARE(accounts.size(), 2);
+
+        QCOMPARE(accounts[0].id, id1);
+        QCOMPARE(accounts[0].email, QStringLiteral("test1@example.com"));
+        QCOMPARE(accounts[0].authType, AuthType::Password);
+
+        QCOMPARE(accounts[1].id, id2);
+        QCOMPARE(accounts[1].email, QStringLiteral("oauth@example.com"));
+        QCOMPARE(accounts[1].authType, AuthType::OAuth2);
+        QCOMPARE(accounts[1].accessToken, QStringLiteral("access_123"));
+        QCOMPARE(accounts[1].refreshToken, QStringLiteral("refresh_456"));
+        QVERIFY(accounts[1].tokenExpiry.isValid());
     }
 };
 

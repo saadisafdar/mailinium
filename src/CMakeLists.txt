@@ -45,6 +45,10 @@ set(MAILINIUM_SOURCES
     network/ImapClient.h
     network/ImapClient.cpp
     
+    # auth/
+    auth/GoogleOAuth.h
+    auth/GoogleOAuth.cpp
+    
     # storage/
     storage/Folder.h
     storage/Message.h

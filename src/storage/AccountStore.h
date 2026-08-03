@@ -38,4 +38,7 @@ public:
 
     // Returns the total number of configured accounts.
     int accountCount() const;
+    
+    // Checks if an account with the given email and provider already exists.
+    bool accountExists(const QString& email, const QString& provider) const;
 };

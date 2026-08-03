@@ -117,6 +117,14 @@ void Logger::log(Level level, const QString& module, const QString& message)
              << message
              << "\n";
 
+    if (message.contains(QStringLiteral("[PIPELINE]"))) {
+        QFile pipelineFile(QStringLiteral("pipeline.log"));
+        if (pipelineFile.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            QTextStream out(&pipelineFile);
+            out << "[" << timestamp << "] " << message << "\n";
+        }
+    }
+
 #ifdef MAILINIUM_DEBUG
     QTextStream(stderr) << "[" << levelString(level) << "] [" << module << "] " << message << "\n";
 #endif

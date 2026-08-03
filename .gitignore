@@ -64,3 +64,6 @@ Testing/
 # Temporary files
 *.tmp
 *.bak
+
+# Configuration secrets
+config/

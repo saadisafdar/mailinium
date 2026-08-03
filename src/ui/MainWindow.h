@@ -48,6 +48,11 @@ public slots:
     void onThemeChanged(bool dark);
     void onSyncStatusChanged(qint64 accountId, const QString& status);
     void onFoldersUpdated(qint64 accountId);
+    
+    void onFolderSelected(qint64 accountId, qint64 folderId);
+    void onMessageSelected(qint64 messageId);
+    void onMessagesUpdated(qint64 accountId, qint64 folderId);
+    void onMessageBodyReady(qint64 accountId, qint64 messageId, const QString& body);
 
 protected:
     void closeEvent(QCloseEvent* event) override;

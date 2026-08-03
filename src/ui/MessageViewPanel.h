@@ -3,6 +3,8 @@
 #include <QWidget>
 
 class QLabel;
+class QTextBrowser;
+struct Message;
 
 //
 // MessageViewPanel — center-right pane displaying the selected message.
@@ -19,9 +21,15 @@ public:
     explicit MessageViewPanel(QWidget* parent = nullptr);
     ~MessageViewPanel() override;
 
+    void displayMessage(const Message& msg, const QString& body);
+
 private:
     void setupUi();
 
-    QWidget* m_headerArea     = nullptr;
-    QLabel*  m_placeholderMsg = nullptr;
+    QWidget*      m_headerArea     = nullptr;
+    QLabel*       m_placeholderMsg = nullptr;
+    QTextBrowser* m_textBrowser    = nullptr;
+    QLabel*       m_subjectLabel   = nullptr;
+    QLabel*       m_fromLabel      = nullptr;
+    QLabel*       m_dateLabel      = nullptr;
 };

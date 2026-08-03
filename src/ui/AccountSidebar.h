@@ -29,12 +29,17 @@ public:
 
     void loadAccounts();
 
+signals:
+    void folderSelected(qint64 accountId, qint64 folderId);
+
 public slots:
     void onThemeChanged(bool dark);
     void onFoldersUpdated(qint64 accountId);
 
 private slots:
     void onAccountSelected();
+    void onFolderSelectionChanged();
+    void onAccountContextMenu(const QPoint& pos);
 
 private:
     void setupUi();

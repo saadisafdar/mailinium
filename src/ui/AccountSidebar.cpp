@@ -11,6 +11,8 @@
 #include <QListWidget>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+#include <QMenu>
+#include <QMessageBox>
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -70,6 +72,9 @@ void AccountSidebar::setupUi()
     
     connect(m_accountList, &QListWidget::itemSelectionChanged, 
             this, &AccountSidebar::onAccountSelected);
+    m_accountList->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_accountList, &QListWidget::customContextMenuRequested, 
+            this, &AccountSidebar::onAccountContextMenu);
             
     layout->addWidget(m_accountList);
 
@@ -116,6 +121,10 @@ void AccountSidebar::setupUi()
     m_folderTree->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_folderTree->setIndentation(16);
     m_folderTree->setRootIsDecorated(false);
+    
+    connect(m_folderTree, &QTreeWidget::itemSelectionChanged,
+            this, &AccountSidebar::onFolderSelectionChanged);
+            
     layout->addWidget(m_folderTree, 1); // stretch — takes remaining height
 
     loadAccounts();
@@ -164,6 +173,49 @@ void AccountSidebar::onAccountSelected()
         auto* item = new QTreeWidgetItem(m_folderTree);
         item->setText(0, f.name);
         item->setData(0, Qt::UserRole, f.id);
+        
+        if (f.role == QStringLiteral("noselect")) {
+            item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+            // Optionally make it visually distinct
+            QFont font = item->font(0);
+            font.setItalic(true);
+            item->setFont(0, font);
+            item->setForeground(0, QBrush(Qt::gray));
+        }
+    }
+}
+
+void AccountSidebar::onFolderSelectionChanged()
+{
+    auto accounts = m_accountList->selectedItems();
+    if (accounts.isEmpty()) return;
+    qint64 accountId = accounts.first()->data(Qt::UserRole).toLongLong();
+    
+    auto items = m_folderTree->selectedItems();
+    if (items.isEmpty()) return;
+    
+    qint64 folderId = items.first()->data(0, Qt::UserRole).toLongLong();
+    emit folderSelected(accountId, folderId);
+}
+
+void AccountSidebar::onAccountContextMenu(const QPoint& pos)
+{
+    QListWidgetItem* item = m_accountList->itemAt(pos);
+    if (!item) return;
+
+    qint64 accountId = item->data(Qt::UserRole).toLongLong();
+    
+    QMenu menu(this);
+    QAction* removeAction = menu.addAction(tr("Remove Account"));
+    
+    QAction* selectedAction = menu.exec(m_accountList->mapToGlobal(pos));
+    if (selectedAction == removeAction) {
+        if (QMessageBox::question(this, tr("Remove Account"), tr("Are you sure you want to remove this account? This will delete all downloaded messages.")) == QMessageBox::Yes) {
+            SyncManager::instance().stopWorker(accountId);
+            AccountStore store;
+            store.deleteAccount(accountId);
+            loadAccounts();
+        }
     }
 }
 

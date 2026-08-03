@@ -321,6 +321,22 @@ bool Database::runMigrations()
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Migration 3 — Add OAuth 2.0 fields to accounts
+    // -----------------------------------------------------------------------
+    if (current < 3) {
+        const QStringList statements = {
+            QStringLiteral("ALTER TABLE accounts ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'password'"),
+            QStringLiteral("ALTER TABLE accounts ADD COLUMN access_token TEXT NOT NULL DEFAULT ''"),
+            QStringLiteral("ALTER TABLE accounts ADD COLUMN refresh_token TEXT NOT NULL DEFAULT ''"),
+            QStringLiteral("ALTER TABLE accounts ADD COLUMN token_expiry TEXT NOT NULL DEFAULT ''")
+        };
+
+        if (!runMigration(3, QStringLiteral("Add OAuth 2.0 fields to accounts"), statements)) {
+            return false;
+        }
+    }
+
     // Future migrations: add new `if (current < N)` blocks here.
     // Never modify a migration that has already been applied.
 

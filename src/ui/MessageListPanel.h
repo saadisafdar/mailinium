@@ -3,6 +3,7 @@
 #include <QWidget>
 
 class QLabel;
+class QListWidget;
 
 //
 // MessageListPanel — center-left pane showing the message list for a folder.
@@ -22,10 +23,21 @@ public:
     explicit MessageListPanel(QWidget* parent = nullptr);
     ~MessageListPanel() override;
 
+    void loadMessages(qint64 folderId);
+
+signals:
+    void messageSelected(qint64 messageId);
+
+private slots:
+    void onSelectionChanged();
+
 private:
     void setupUi();
 
-    QWidget* m_headerBar      = nullptr;
-    QLabel*  m_folderLabel    = nullptr; // shows selected folder name
-    QLabel*  m_placeholderMsg = nullptr; // empty state
+    QWidget*     m_headerBar      = nullptr;
+    QLabel*      m_folderLabel    = nullptr; // shows selected folder name
+    QLabel*      m_placeholderMsg = nullptr; // empty state
+    QListWidget* m_messageList    = nullptr;
+    
+    qint64 m_currentFolderId = -1;
 };

@@ -4,7 +4,11 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QVBoxLayout>
+#include "../storage/MessageStore.h"
+#include "../storage/FolderStore.h"
+#include "../core/Logger.h"
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -58,7 +62,6 @@ void MessageListPanel::setupUi()
     layout->addWidget(sep);
 
     // -- Empty state placeholder ---------------------------------------------
-    // Replaced by QListView + MessageListModel in Phase 3E.
     m_placeholderMsg = new QLabel(tr("Select a folder to view messages."), this);
     m_placeholderMsg->setAlignment(Qt::AlignCenter);
     m_placeholderMsg->setWordWrap(true);
@@ -72,5 +75,67 @@ void MessageListPanel::setupUi()
         f.setPointSizeF(f.pointSizeF() * 0.92);
         m_placeholderMsg->setFont(f);
     }
-    layout->addWidget(m_placeholderMsg, 1, Qt::AlignCenter);
+    layout->addWidget(m_placeholderMsg, 0, Qt::AlignCenter);
+    
+    // -- Message list --------------------------------------------------------
+    m_messageList = new QListWidget(this);
+    m_messageList->setFrameShape(QFrame::NoFrame);
+    m_messageList->hide(); // hidden initially
+    layout->addWidget(m_messageList, 1); // stretch
+    
+    connect(m_messageList, &QListWidget::itemSelectionChanged, this, &MessageListPanel::onSelectionChanged);
+}
+
+void MessageListPanel::loadMessages(qint64 folderId)
+{
+    m_currentFolderId = folderId;
+    
+    FolderStore fstore;
+    auto optFolder = fstore.folderById(folderId);
+    if (optFolder.has_value()) {
+        m_folderLabel->setText(optFolder->name);
+    }
+    
+    m_messageList->clear();
+    
+    MessageStore store;
+    QList<Message> messages = store.messagesForFolder(folderId, 100); // load up to 100
+    
+    Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 8. Number loaded from MessageStore: ") + QString::number(messages.size()));
+    Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 9. Number passed to MessageListPanel: ") + QString::number(messages.size()));
+    if (messages.isEmpty()) {
+        Logger::instance().error(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] STOP: 0 messages reached the UI!"));
+    }
+    
+    if (messages.isEmpty()) {
+        m_messageList->hide();
+        m_placeholderMsg->setText(tr("No messages in this folder."));
+        m_placeholderMsg->show();
+    } else {
+        m_placeholderMsg->hide();
+        m_messageList->show();
+        
+        for (const Message& msg : messages) {
+            // For Phase 3C, we just use a simple string.
+            // In Phase 3E this would use a QStyledItemDelegate
+            QString displayText = msg.fromName.isEmpty() ? msg.fromAddress : msg.fromName;
+            displayText += "\n" + msg.subject;
+            displayText += "\n" + msg.date.toString("yyyy-MM-dd hh:mm");
+            
+            auto* item = new QListWidgetItem(displayText, m_messageList);
+            item->setData(Qt::UserRole, msg.id);
+            // Add some padding
+            item->setSizeHint(QSize(m_messageList->width(), 60));
+        }
+        Logger::instance().debug(QStringLiteral("ui"), QStringLiteral("MessageListPanel populated ") + QString::number(messages.size()) + " items in the list widget.");
+    }
+}
+
+void MessageListPanel::onSelectionChanged()
+{
+    auto items = m_messageList->selectedItems();
+    if (!items.isEmpty()) {
+        qint64 messageId = items.first()->data(Qt::UserRole).toLongLong();
+        emit messageSelected(messageId);
+    }
 }

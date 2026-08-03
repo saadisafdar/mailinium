@@ -3,7 +3,10 @@
 #include <QApplication>
 #include <QFrame>
 #include <QLabel>
+#include <QTextBrowser>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
+#include "../storage/Message.h"
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -35,9 +38,36 @@ void MessageViewPanel::setupUi()
     m_headerArea = new QWidget(this);
     m_headerArea->setFixedHeight(80);
     m_headerArea->setAutoFillBackground(true);
+    m_headerArea->hide(); // hidden initially
 
-    // Header area will be populated in Phase 3E.
-    // For now it is intentionally empty — it represents the reserved space.
+    auto* headerLayout = new QVBoxLayout(m_headerArea);
+    headerLayout->setContentsMargins(16, 12, 16, 12);
+    
+    m_subjectLabel = new QLabel(m_headerArea);
+    {
+        QFont f = m_subjectLabel->font();
+        f.setPointSizeF(f.pointSizeF() * 1.2);
+        f.setBold(true);
+        m_subjectLabel->setFont(f);
+    }
+    headerLayout->addWidget(m_subjectLabel);
+    
+    auto* subHeaderLayout = new QHBoxLayout();
+    m_fromLabel = new QLabel(m_headerArea);
+    m_dateLabel = new QLabel(m_headerArea);
+    
+    {
+        QPalette p = m_dateLabel->palette();
+        p.setColor(QPalette::WindowText, QApplication::palette().color(QPalette::Disabled, QPalette::WindowText));
+        m_dateLabel->setPalette(p);
+    }
+    
+    subHeaderLayout->addWidget(m_fromLabel);
+    subHeaderLayout->addStretch();
+    subHeaderLayout->addWidget(m_dateLabel);
+    
+    headerLayout->addLayout(subHeaderLayout);
+
     layout->addWidget(m_headerArea);
 
     // -- Separator -----------------------------------------------------------
@@ -62,4 +92,24 @@ void MessageViewPanel::setupUi()
         m_placeholderMsg->setFont(f);
     }
     layout->addWidget(m_placeholderMsg, 1, Qt::AlignCenter);
+    
+    m_textBrowser = new QTextBrowser(this);
+    m_textBrowser->setFrameShape(QFrame::NoFrame);
+    m_textBrowser->setOpenExternalLinks(true);
+    m_textBrowser->hide();
+    
+    layout->addWidget(m_textBrowser, 1);
+}
+
+void MessageViewPanel::displayMessage(const Message& msg, const QString& body)
+{
+    m_placeholderMsg->hide();
+    m_headerArea->show();
+    m_textBrowser->show();
+    
+    m_subjectLabel->setText(msg.subject);
+    m_fromLabel->setText(msg.fromName.isEmpty() ? msg.fromAddress : msg.fromName + " <" + msg.fromAddress + ">");
+    m_dateLabel->setText(msg.date.toString("yyyy-MM-dd hh:mm"));
+    
+    m_textBrowser->setPlainText(body);
 }

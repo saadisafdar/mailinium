@@ -10,6 +10,8 @@
 #include "../core/SyncManager.h"
 #include "AccountSetupWizard.h"
 #include "../storage/AccountStore.h"
+#include "../storage/FolderStore.h"
+#include "../storage/MessageStore.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -380,6 +382,17 @@ void MainWindow::connectSignals()
             this, &MainWindow::onSyncStatusChanged);
     connect(&SyncManager::instance(), &SyncManager::foldersUpdated,
             this, &MainWindow::onFoldersUpdated);
+    connect(&SyncManager::instance(), &SyncManager::messagesUpdated,
+            this, &MainWindow::onMessagesUpdated);
+    connect(&SyncManager::instance(), &SyncManager::messageBodyReady,
+            this, &MainWindow::onMessageBodyReady);
+            
+    // Sidebar
+    connect(m_sidebar, &AccountSidebar::folderSelected,
+            this, &MainWindow::onFolderSelected);
+            
+    // Message List
+    connect(m_messageList, &MessageListPanel::messageSelected, this, &MainWindow::onMessageSelected);
 
     // Help
     connect(m_actAbout, &QAction::triggered, this, &MainWindow::onAbout);
@@ -441,6 +454,45 @@ void MainWindow::onFoldersUpdated(qint64 accountId)
     Q_UNUSED(accountId);
     // Sidebar updates automatically, but we can log here
     Logger::instance().info(QStringLiteral("ui"), QStringLiteral("MainWindow received folders update for account ") + QString::number(accountId));
+}
+
+void MainWindow::onFolderSelected(qint64 accountId, qint64 folderId)
+{
+    Logger::instance().info(QStringLiteral("ui"), QStringLiteral("MainWindow folder selected: ") + QString::number(folderId));
+    m_messageList->loadMessages(folderId);
+    SyncManager::instance().syncFolder(accountId, folderId);
+}
+
+void MainWindow::onMessageSelected(qint64 messageId)
+{
+    // Retrieve the message to get its folderId and basic data
+    MessageStore store;
+    auto optMsg = store.messageById(messageId);
+    if (!optMsg.has_value()) return;
+    
+    // We also need the account ID to route to the correct worker
+    FolderStore fstore;
+    auto optFolder = fstore.folderById(optMsg->folderId);
+    if (!optFolder.has_value()) return;
+    
+    SyncManager::instance().fetchMessageBody(optFolder->accountId, optMsg->folderId, messageId);
+}
+
+void MainWindow::onMessagesUpdated(qint64 accountId, qint64 folderId)
+{
+    Q_UNUSED(accountId);
+    // The list panel can just reload from DB if it is showing this folder
+    m_messageList->loadMessages(folderId);
+}
+
+void MainWindow::onMessageBodyReady(qint64 accountId, qint64 messageId, const QString& body)
+{
+    Q_UNUSED(accountId);
+    MessageStore store;
+    auto optMsg = store.messageById(messageId);
+    if (optMsg.has_value()) {
+        m_messageView->displayMessage(optMsg.value(), body);
+    }
 }
 
 void MainWindow::onNewMessage()

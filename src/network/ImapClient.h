@@ -7,6 +7,7 @@
 #include <QList>
 
 #include "storage/Folder.h"
+#include "storage/Message.h"
 
 //
 // ImapClient — lightweight native IMAP client over QSslSocket.
@@ -24,7 +25,15 @@ public:
     void disconnectFromServer();
 
     void login(const QString& username, const QString& password);
+    
+    // Authenticate using OAuth 2.0 (XOAUTH2)
+    void loginOAuth2(const QString& username, const QString& accessToken);
+
     void listFolders();
+    void selectFolder(const QString& folderName);
+    void searchAllUids();
+    void fetchMessageHeaders(const QList<qint64>& uids);
+    void fetchMessageBody(qint64 uid);
 
 signals:
     void connected();
@@ -36,6 +45,11 @@ signals:
 
     void foldersListed(const QList<Folder>& folders);
     void listFailed(const QString& reason);
+
+    void folderSelected(int messageCount);
+    void uidsFound(const QList<qint64>& uids);
+    void headersFetched(const QList<Message>& messages);
+    void bodyFetched(qint64 uid, const QString& body);
 
 private slots:
     void onSocketConnected();
@@ -52,7 +66,11 @@ private:
         NotAuthenticated,
         Authenticating,
         Authenticated,
-        ListingFolders
+        ListingFolders,
+        SelectingFolder,
+        SearchingUids,
+        FetchingHeaders,
+        FetchingBody
     };
 
     void processLine(const QByteArray& line);
@@ -70,4 +88,19 @@ private:
     void handleGreeting(const QByteArray& line);
     void handleLoginResponse(const QByteArray& line);
     void handleListResponse(const QByteArray& line);
+    void handleSelectResponse(const QByteArray& line);
+    void handleSearchResponse(const QByteArray& line);
+    void handleFetchResponse(const QByteArray& line);
+    
+    // Parser state
+    QByteArray m_buffer;
+    QByteArray m_currentLogicalLine;
+    bool m_inLiteralData = false;
+    int m_literalBytesExpected = 0;
+    
+    // Command state
+    int m_expectedMessageCount = 0;
+    QList<qint64> m_parsedUids;
+    QList<Message> m_parsedMessages;
+    qint64 m_currentFetchUid = 0;
 };

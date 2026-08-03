@@ -60,11 +60,11 @@ qint64 MessageStore::insertMessage(const Message& msg)
 
     q.bindValue(QStringLiteral(":folderId"),    msg.folderId);
     q.bindValue(QStringLiteral(":uid"),         msg.uid);
-    q.bindValue(QStringLiteral(":messageId"),   msg.messageId);
+    q.bindValue(QStringLiteral(":messageId"),   msg.messageId.isNull() ? QStringLiteral("") : msg.messageId);
     q.bindValue(QStringLiteral(":threadId"),    msg.threadId);
-    q.bindValue(QStringLiteral(":subject"),     msg.subject);
-    q.bindValue(QStringLiteral(":fromAddress"), msg.fromAddress);
-    q.bindValue(QStringLiteral(":fromName"),    msg.fromName);
+    q.bindValue(QStringLiteral(":subject"),     msg.subject.isNull() ? QStringLiteral("") : msg.subject);
+    q.bindValue(QStringLiteral(":fromAddress"), msg.fromAddress.isNull() ? QStringLiteral("") : msg.fromAddress);
+    q.bindValue(QStringLiteral(":fromName"),    msg.fromName.isNull() ? QStringLiteral("") : msg.fromName);
     q.bindValue(QStringLiteral(":dateUtc"),
         msg.date.isValid()
             ? msg.date.toTimeZone(QTimeZone::UTC).toString(Qt::ISODate)

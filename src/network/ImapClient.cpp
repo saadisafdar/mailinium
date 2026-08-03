@@ -66,6 +66,31 @@ void ImapClient::login(const QString& username, const QString& password)
     m_socket->write(cmd.toUtf8());
 }
 
+void ImapClient::loginOAuth2(const QString& username, const QString& accessToken)
+{
+    if (m_state != State::NotAuthenticated) {
+        emit loginFailed(QStringLiteral("Not connected or already authenticated."));
+        return;
+    }
+
+    m_state = State::Authenticating;
+    m_currentTag = generateTag().toUtf8();
+    
+    // XOAUTH2 payload: base64("user=" + username + "^Aauth=Bearer " + accessToken + "^A^A")
+    // where ^A is \x01
+    QString payloadStr = QStringLiteral("user=") + username + QStringLiteral("\x01") +
+                         QStringLiteral("auth=Bearer ") + accessToken + QStringLiteral("\x01\x01");
+                         
+    QByteArray payloadBase64 = payloadStr.toUtf8().toBase64();
+
+    QString cmd = QStringLiteral("%1 AUTHENTICATE XOAUTH2 %2\r\n")
+                  .arg(QString::fromUtf8(m_currentTag))
+                  .arg(QString::fromUtf8(payloadBase64));
+                  
+    Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending AUTHENTICATE XOAUTH2 for ") + username);
+    m_socket->write(cmd.toUtf8());
+}
+
 void ImapClient::listFolders()
 {
     if (m_state != State::Authenticated) {
@@ -79,6 +104,66 @@ void ImapClient::listFolders()
     
     QByteArray cmd = m_currentTag + " LIST \"\" \"*\"\r\n";
     Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending LIST command"));
+    m_socket->write(cmd);
+}
+
+void ImapClient::selectFolder(const QString& folderName)
+{
+    if (m_state == State::Disconnected) return;
+    m_state = State::SelectingFolder;
+    m_expectedMessageCount = 0;
+    m_currentTag = generateTag().toUtf8();
+    
+    // Escape quotes in folder name
+    QString safeFolder = folderName;
+    safeFolder.replace("\"", "\\\"");
+    
+    QByteArray cmd = m_currentTag + " SELECT \"" + safeFolder.toUtf8() + "\"\r\n";
+    Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 1. Selected folder: ") + safeFolder);
+    m_socket->write(cmd);
+}
+
+void ImapClient::searchAllUids()
+{
+    if (m_state == State::Disconnected) return;
+    m_state = State::SearchingUids;
+    m_parsedUids.clear();
+    m_currentTag = generateTag().toUtf8();
+    QByteArray cmd = m_currentTag + " UID SEARCH ALL\r\n";
+    Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 2. SEARCH command sent: ") + cmd.trimmed());
+    m_socket->write(cmd);
+}
+
+void ImapClient::fetchMessageHeaders(const QList<qint64>& uids)
+{
+    if (uids.isEmpty()) {
+        emit headersFetched(QList<Message>());
+        return;
+    }
+    m_state = State::FetchingHeaders;
+    m_parsedMessages.clear();
+    
+    // Chunk UIDs to avoid "Command line too long" from the server
+    // For now we will fetch the first 100 UIDs to test the pipeline
+    QList<qint64> chunk = uids.mid(0, 100);
+    
+    QStringList uidStrs;
+    for (qint64 u : chunk) uidStrs << QString::number(u);
+    QString sequence = uidStrs.join(",");
+    
+    m_currentTag = generateTag().toUtf8();
+    QByteArray cmd = m_currentTag + " UID FETCH " + sequence.toUtf8() + " (UID ENVELOPE INTERNALDATE RFC822.SIZE FLAGS)\r\n";
+    Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 5. FETCH command sent: ") + cmd.trimmed());
+    m_socket->write(cmd);
+}
+
+void ImapClient::fetchMessageBody(qint64 uid)
+{
+    m_state = State::FetchingBody;
+    m_currentFetchUid = uid;
+    m_currentTag = generateTag().toUtf8();
+    QByteArray cmd = m_currentTag + " UID FETCH " + QByteArray::number(uid) + " (BODY.PEEK[])\r\n";
+    Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending UID FETCH body command for UID ") + QString::number(uid));
     m_socket->write(cmd);
 }
 
@@ -126,21 +211,54 @@ void ImapClient::onSslErrors(const QList<QSslError>& errors)
 
 void ImapClient::onReadyRead()
 {
-    while (m_socket->canReadLine()) {
-        QByteArray line = m_socket->readLine();
-        // Remove \r\n
-        if (line.endsWith("\r\n")) {
-            line.chop(2);
-        } else if (line.endsWith("\n")) {
-            line.chop(1);
+    m_buffer.append(m_socket->readAll());
+
+    while (!m_buffer.isEmpty()) {
+        if (m_inLiteralData) {
+            if (m_buffer.size() >= m_literalBytesExpected) {
+                m_currentLogicalLine.append(m_buffer.left(m_literalBytesExpected));
+                m_buffer.remove(0, m_literalBytesExpected);
+                m_inLiteralData = false;
+            } else {
+                break; // Need more data for the literal
+            }
+        } else {
+            int crlfIdx = m_buffer.indexOf("\r\n");
+            if (crlfIdx == -1) break; // Need more data for a full line
+            
+            QByteArray line = m_buffer.left(crlfIdx);
+            m_buffer.remove(0, crlfIdx + 2);
+            
+            if (line.endsWith('}')) {
+                int braceIdx = line.lastIndexOf('{');
+                if (braceIdx != -1) {
+                    bool ok;
+                    int size = line.mid(braceIdx + 1, line.length() - braceIdx - 2).toInt(&ok);
+                    if (ok) {
+                        m_literalBytesExpected = size;
+                        m_inLiteralData = true;
+                        
+                        m_currentLogicalLine.append(line.left(braceIdx));
+                        continue;
+                    }
+                }
+            }
+            
+            m_currentLogicalLine.append(line);
+            
+            processLine(m_currentLogicalLine);
+            m_currentLogicalLine.clear();
         }
-        processLine(line);
     }
 }
 
 void ImapClient::processLine(const QByteArray& line)
 {
-    Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("S: ") + QString::fromUtf8(line));
+    if (m_state == State::SearchingUids && line.startsWith("* SEARCH")) {
+        Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 3. Raw SEARCH response: ") + QString::fromUtf8(line));
+    } else {
+        Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("S: ") + QString::fromUtf8(line));
+    }
 
     if (m_state == State::Greeting) {
         handleGreeting(line);
@@ -148,6 +266,12 @@ void ImapClient::processLine(const QByteArray& line)
         handleLoginResponse(line);
     } else if (m_state == State::ListingFolders) {
         handleListResponse(line);
+    } else if (m_state == State::SelectingFolder) {
+        handleSelectResponse(line);
+    } else if (m_state == State::SearchingUids) {
+        handleSearchResponse(line);
+    } else if (m_state == State::FetchingHeaders || m_state == State::FetchingBody) {
+        handleFetchResponse(line);
     }
 }
 
@@ -196,7 +320,10 @@ void ImapClient::handleListResponse(const QByteArray& line)
                 
                 // Extremely basic role guessing based on standard names
                 QString lowerName = folderName.toLower();
-                if (lowerName == "inbox") f.role = "inbox";
+                
+                if (strLine.contains(QStringLiteral("\\Noselect"), Qt::CaseInsensitive)) {
+                    f.role = QStringLiteral("noselect");
+                } else if (lowerName == "inbox") f.role = "inbox";
                 else if (lowerName.contains("sent")) f.role = "sent";
                 else if (lowerName.contains("trash") || lowerName.contains("bin")) f.role = "trash";
                 else if (lowerName.contains("draft")) f.role = "drafts";
@@ -214,5 +341,133 @@ void ImapClient::handleListResponse(const QByteArray& line)
         Logger::instance().error(QStringLiteral("imap"), QStringLiteral("LIST failed: ") + QString::fromUtf8(line));
         m_state = State::Authenticated;
         emit listFailed(QString::fromUtf8(line));
+    }
+}
+
+void ImapClient::handleSelectResponse(const QByteArray& line)
+{
+    if (line.startsWith("* ") && line.endsWith(" EXISTS")) {
+        int spaceIdx = line.indexOf(' ', 2);
+        if (spaceIdx != -1) {
+            bool ok;
+            int count = line.mid(2, spaceIdx - 2).toInt(&ok);
+            if (ok) m_expectedMessageCount = count;
+        }
+        Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("SELECT found EXISTS: ") + QString::number(m_expectedMessageCount));
+    } else if (line.startsWith(m_currentTag + " OK")) {
+        Logger::instance().info(QStringLiteral("imap"), QStringLiteral("SELECT succeeded. Messages: ") + QString::number(m_expectedMessageCount));
+        m_state = State::Authenticated;
+        emit folderSelected(m_expectedMessageCount);
+    } else if (line.startsWith(m_currentTag + " NO") || line.startsWith(m_currentTag + " BAD")) {
+        Logger::instance().error(QStringLiteral("imap"), QStringLiteral("SELECT failed: ") + QString::fromUtf8(line));
+        m_state = State::Authenticated;
+        emit errorOccurred(QString::fromUtf8(line));
+    }
+}
+
+void ImapClient::handleSearchResponse(const QByteArray& line)
+{
+    if (line.startsWith("* SEARCH")) {
+        QList<QByteArray> parts = line.mid(9).split(' ');
+        for (const QByteArray& part : parts) {
+            if (part.isEmpty()) continue;
+            bool ok;
+            qint64 uid = part.toLongLong(&ok);
+            if (ok) m_parsedUids.append(uid);
+        }
+    } else if (line.startsWith(m_currentTag + " OK")) {
+        Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 4. Number of UIDs returned: ") + QString::number(m_parsedUids.size()));
+        if (m_parsedUids.isEmpty()) {
+            Logger::instance().error(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] STOP: 0 UIDs returned from SEARCH!"));
+        }
+        m_state = State::Authenticated;
+        emit uidsFound(m_parsedUids);
+    } else if (line.startsWith(m_currentTag + " NO") || line.startsWith(m_currentTag + " BAD")) {
+        Logger::instance().error(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] SEARCH failed: ") + QString::fromUtf8(line));
+        m_state = State::Authenticated;
+        emit errorOccurred(QString::fromUtf8(line));
+    }
+}
+
+void ImapClient::handleFetchResponse(const QByteArray& line)
+{
+    if (line.startsWith("* ") && line.contains(" FETCH ")) {
+        if (m_state == State::FetchingHeaders) {
+            Message msg;
+            
+            int uidIdx = line.indexOf("UID ");
+            if (uidIdx != -1) {
+                int uidEndIdx = line.indexOf(' ', uidIdx + 4);
+                if (uidEndIdx == -1) uidEndIdx = line.indexOf(')', uidIdx + 4);
+                if (uidEndIdx != -1) {
+                    msg.uid = line.mid(uidIdx + 4, uidEndIdx - uidIdx - 4).toLongLong();
+                }
+            }
+            
+            int sizeIdx = line.indexOf("RFC822.SIZE ");
+            if (sizeIdx != -1) {
+                int sizeEndIdx = line.indexOf(' ', sizeIdx + 12);
+                if (sizeEndIdx == -1) sizeEndIdx = line.indexOf(')', sizeIdx + 12);
+                if (sizeEndIdx != -1) {
+                    msg.size = line.mid(sizeIdx + 12, sizeEndIdx - sizeIdx - 12).toLongLong();
+                }
+            }
+            
+            int envIdx = line.indexOf("ENVELOPE (");
+            if (envIdx != -1) {
+                int firstQuote = line.indexOf('"', envIdx + 10);
+                if (firstQuote != -1) {
+                    int secondQuote = line.indexOf('"', firstQuote + 1); // date
+                    if (secondQuote != -1) {
+                        int thirdQuote = line.indexOf('"', secondQuote + 1);
+                        if (thirdQuote != -1) {
+                            int fourthQuote = line.indexOf('"', thirdQuote + 1); // subject
+                            if (fourthQuote != -1) {
+                                msg.subject = QString::fromUtf8(line.mid(thirdQuote + 1, fourthQuote - thirdQuote - 1));
+                            }
+                        }
+                    }
+                }
+            }
+            msg.date = QDateTime::currentDateTimeUtc();
+            msg.fromAddress = QStringLiteral("sender@example.com");
+            msg.fromName = QStringLiteral("Sender");
+            
+            if (msg.uid > 0) {
+                Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("FETCH parsed header UID: ") + QString::number(msg.uid));
+                m_parsedMessages.append(msg);
+            } else {
+                Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("FETCH parsed header UID failed, UID was 0. Line: ") + QString::fromUtf8(line));
+            }
+        } else if (m_state == State::FetchingBody) {
+            int bodyIdx = line.indexOf("BODY");
+            if (bodyIdx != -1) {
+                int bracketEnd = line.indexOf(']', bodyIdx);
+                if (bracketEnd != -1) {
+                    QString bodyText = QString::fromUtf8(line.mid(bracketEnd + 2));
+                    if (bodyText.endsWith(')')) {
+                        bodyText.chop(1);
+                    }
+                    Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("FETCH parsed body for UID: ") + QString::number(m_currentFetchUid));
+                    emit bodyFetched(m_currentFetchUid, bodyText);
+                }
+            }
+        }
+    } else if (line.startsWith(m_currentTag + " OK")) {
+        if (m_state == State::FetchingHeaders) {
+            Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 6. Number of headers parsed: ") + QString::number(m_parsedMessages.size()));
+            if (m_parsedMessages.isEmpty()) {
+                Logger::instance().error(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] STOP: 0 headers parsed!"));
+            }
+            m_state = State::Authenticated;
+            emit headersFetched(m_parsedMessages);
+        } else {
+            Logger::instance().info(QStringLiteral("imap"), QStringLiteral("FETCH BODY succeeded."));
+            m_state = State::Authenticated;
+        }
+    } else if (line.startsWith(m_currentTag + " NO") || line.startsWith(m_currentTag + " BAD")) {
+        Logger::instance().error(QStringLiteral("imap"), QStringLiteral("FETCH failed: ") + QString::fromUtf8(line));
+        m_state = State::Authenticated;
+        emit errorOccurred(QString::fromUtf8(line));
     }
 }
