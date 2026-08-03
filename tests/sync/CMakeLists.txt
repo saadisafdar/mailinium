@@ -1,0 +1,18 @@
+set(SYNC_SOURCES
+    "${CMAKE_SOURCE_DIR}/src/core/Logger.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/Settings.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/SyncWorker.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/SyncManager.cpp"
+    "${CMAKE_SOURCE_DIR}/src/network/ImapClient.cpp"
+    "${CMAKE_SOURCE_DIR}/src/auth/GoogleOAuth.cpp"
+    "${CMAKE_SOURCE_DIR}/src/storage/Database.cpp"
+    "${CMAKE_SOURCE_DIR}/src/storage/AccountStore.cpp"
+    "${CMAKE_SOURCE_DIR}/src/storage/FolderStore.cpp"
+    "${CMAKE_SOURCE_DIR}/src/storage/MessageStore.cpp"
+)
+
+mailinium_add_test(
+    NAME SyncTest
+    SOURCES SyncTest.cpp ${SYNC_SOURCES}
+    LINKS Qt6::Sql Qt6::Network Qt6::Widgets
+)

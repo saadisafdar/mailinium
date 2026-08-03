@@ -29,6 +29,7 @@ private:
     void setupUi();
     QWidget* buildGeneralTab();
     QWidget* buildAccountsTab();
+    QWidget* buildSyncTab();
     QWidget* buildAdvancedTab();
 
     QTabWidget* m_tabs = nullptr;

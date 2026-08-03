@@ -1,5 +1,8 @@
 #include "network/ImapClient.h"
 #include "core/Logger.h"
+#include "storage/Folder.h"
+#include "storage/Message.h"
+#include "core/Settings.h"
 
 #include <QSslError>
 #include <QStringList>
@@ -143,9 +146,10 @@ void ImapClient::fetchMessageHeaders(const QList<qint64>& uids)
     m_state = State::FetchingHeaders;
     m_parsedMessages.clear();
     
-    // Chunk UIDs to avoid "Command line too long" from the server
-    // For now we will fetch the first 100 UIDs to test the pipeline
-    QList<qint64> chunk = uids.mid(0, 100);
+    // Chunk UIDs according to SyncFetchLimit setting to avoid "Command line too long"
+    int limit = Settings::instance().intValue(Settings::Key::SyncFetchLimit);
+    if (limit <= 0) limit = 100;
+    QList<qint64> chunk = uids.mid(0, limit);
     
     QStringList uidStrs;
     for (qint64 u : chunk) uidStrs << QString::number(u);

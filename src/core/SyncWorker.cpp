@@ -25,6 +25,7 @@ SyncWorker::SyncWorker(const Account& account, QObject* parent)
     connect(m_imapClient, &ImapClient::bodyFetched, this, &SyncWorker::onBodyFetched);
 
     connect(&m_syncTimer, &QTimer::timeout, this, &SyncWorker::doSync);
+    connect(&Settings::instance(), &Settings::settingChanged, this, &SyncWorker::onSettingChanged);
 }
 
 SyncWorker::~SyncWorker()
@@ -131,8 +132,10 @@ void SyncWorker::onLoginSuccessful()
     // Perform initial sync
     doSync();
     
-    // Set up periodic sync (e.g., every 5 minutes)
-    m_syncTimer.start(5 * 60 * 1000);
+    // Set up periodic sync using configured interval
+    int intervalSecs = Settings::instance().intValue(Settings::Key::SyncIntervalSeconds);
+    if (intervalSecs < 10) intervalSecs = 10; // safety minimum
+    m_syncTimer.start(intervalSecs * 1000);
 }
 
 void SyncWorker::onLoginFailed(const QString& reason)
@@ -164,6 +167,19 @@ void SyncWorker::onTokenRefreshFailed(const QString& errorMsg)
     Logger::instance().error(QStringLiteral("sync"), QStringLiteral("Token refresh failed: ") + errorMsg);
     emit statusChanged(QStringLiteral("Token refresh failed"));
     m_imapClient->disconnectFromServer();
+}
+
+void SyncWorker::onSettingChanged(Settings::Key key, const QVariant& value)
+{
+    if (key == Settings::Key::SyncIntervalSeconds) {
+        int intervalSecs = value.toInt();
+        if (intervalSecs < 10) intervalSecs = 10;
+        Logger::instance().info(QStringLiteral("sync"),
+            QStringLiteral("Updating sync timer interval to ") + QString::number(intervalSecs) + "s for account " + QString::number(m_account.id));
+        if (m_syncTimer.isActive()) {
+            m_syncTimer.start(intervalSecs * 1000);
+        }
+    }
 }
 
 void SyncWorker::onFoldersListed(const QList<Folder>& folders)

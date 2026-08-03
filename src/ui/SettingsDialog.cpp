@@ -10,6 +10,7 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QRadioButton>
+#include <QSpinBox>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
@@ -40,6 +41,7 @@ void SettingsDialog::setupUi()
     m_tabs = new QTabWidget(this);
     m_tabs->addTab(buildGeneralTab(),  tr("General"));
     m_tabs->addTab(buildAccountsTab(), tr("Accounts"));
+    m_tabs->addTab(buildSyncTab(),     tr("Sync"));
     m_tabs->addTab(buildAdvancedTab(), tr("Advanced"));
     layout->addWidget(m_tabs);
 
@@ -192,8 +194,71 @@ QWidget* SettingsDialog::buildAccountsTab()
 }
 
 // ---------------------------------------------------------------------------
-// Advanced tab
+// Sync tab
 // ---------------------------------------------------------------------------
+
+QWidget* SettingsDialog::buildSyncTab()
+{
+    auto* page = new QWidget;
+    auto* outer = new QVBoxLayout(page);
+    outer->setContentsMargins(16, 16, 16, 16);
+    outer->setSpacing(16);
+
+    // -- Schedule group ----------------------------------------------------
+    auto* scheduleGroup = new QGroupBox(tr("Synchronization Schedule"), page);
+    auto* scheduleForm  = new QFormLayout(scheduleGroup);
+    scheduleForm->setContentsMargins(12, 12, 12, 12);
+    scheduleForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+
+    // Interval spinbox (minutes)
+    auto* intervalSpin = new QSpinBox(scheduleGroup);
+    intervalSpin->setRange(1, 1440); // 1 minute to 24 hours
+    intervalSpin->setSuffix(tr(" minutes"));
+    int currentSecs = Settings::instance().intValue(Settings::Key::SyncIntervalSeconds);
+    intervalSpin->setValue(qMax(1, currentSecs / 60));
+
+    connect(intervalSpin, &QSpinBox::valueChanged, this, [](int mins) {
+        Settings::instance().setValue(Settings::Key::SyncIntervalSeconds, mins * 60);
+    });
+    scheduleForm->addRow(tr("Check for new mail every:"), intervalSpin);
+
+    // Header Fetch Limit
+    auto* fetchLimitSpin = new QSpinBox(scheduleGroup);
+    fetchLimitSpin->setRange(10, 1000);
+    fetchLimitSpin->setSingleStep(10);
+    fetchLimitSpin->setSuffix(tr(" messages"));
+    fetchLimitSpin->setValue(Settings::instance().intValue(Settings::Key::SyncFetchLimit));
+
+    connect(fetchLimitSpin, &QSpinBox::valueChanged, this, [](int limit) {
+        Settings::instance().setValue(Settings::Key::SyncFetchLimit, limit);
+    });
+    scheduleForm->addRow(tr("Fetch limit per folder:"), fetchLimitSpin);
+
+    outer->addWidget(scheduleGroup);
+
+    // -- Storage & Cache group ---------------------------------------------
+    auto* cacheGroup = new QGroupBox(tr("Storage & Cache"), page);
+    auto* cacheForm  = new QFormLayout(cacheGroup);
+    cacheForm->setContentsMargins(12, 12, 12, 12);
+    cacheForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+
+    // Cache limit spinbox (MB)
+    auto* cacheLimitSpin = new QSpinBox(cacheGroup);
+    cacheLimitSpin->setRange(50, 10000); // 50MB to 10GB
+    cacheLimitSpin->setSingleStep(50);
+    cacheLimitSpin->setSuffix(tr(" MB"));
+    cacheLimitSpin->setValue(Settings::instance().intValue(Settings::Key::SyncOfflineCacheMB));
+
+    connect(cacheLimitSpin, &QSpinBox::valueChanged, this, [](int limitMb) {
+        Settings::instance().setValue(Settings::Key::SyncOfflineCacheMB, limitMb);
+    });
+    cacheForm->addRow(tr("Offline storage limit:"), cacheLimitSpin);
+
+    outer->addWidget(cacheGroup);
+    outer->addStretch();
+
+    return page;
+}
 
 QWidget* SettingsDialog::buildAdvancedTab()
 {

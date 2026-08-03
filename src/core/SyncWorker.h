@@ -6,6 +6,7 @@
 #include "storage/Account.h"
 #include "storage/Folder.h"
 #include "storage/Message.h"
+#include "core/Settings.h"
 
 class ImapClient;
 class GoogleOAuth;
@@ -52,6 +53,8 @@ private slots:
     void onTokenRefreshSuccessful(const QString& email, const QString& accessToken, const QString& refreshToken, int expiresInSecs);
     void onTokenRefreshFailed(const QString& errorMsg);
     
+    void onSettingChanged(Settings::Key key, const QVariant& value);
+
     void doSync();
 
 private:
