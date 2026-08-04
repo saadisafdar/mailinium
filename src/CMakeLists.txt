@@ -40,6 +40,15 @@ set(MAILINIUM_SOURCES
     ui/MessageViewPanel.cpp
     ui/SettingsDialog.h
     ui/SettingsDialog.cpp
+    ui/HtmlSanitizer.h
+    ui/HtmlSanitizer.cpp
+    ui/AttachmentBar.h
+    ui/AttachmentBar.cpp
+
+    # protocols/
+    protocols/MimeMessage.h
+    protocols/MimeParser.h
+    protocols/MimeParser.cpp
     
     # network/
     network/ImapClient.h
@@ -105,6 +114,10 @@ target_link_libraries(Mailinium PRIVATE
     Qt6::Network
     Qt6::Sql
 )
+
+if(TARGET Qt6::WebEngineWidgets)
+    target_link_libraries(Mailinium PRIVATE Qt6::WebEngineWidgets)
+endif()
 
 # ---------------------------------------------------------------------------
 # Apply compiler options

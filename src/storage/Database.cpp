@@ -337,6 +337,53 @@ bool Database::runMigrations()
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Migration 4 — Add message_bodies and attachments tables
+    // -----------------------------------------------------------------------
+    if (current < 4) {
+        const QStringList statements = {
+            QStringLiteral(
+                "CREATE TABLE message_bodies ("
+                "    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,"
+                "    html_body  TEXT NOT NULL DEFAULT '',"
+                "    plain_body TEXT NOT NULL DEFAULT ''"
+                ")"
+            ),
+            QStringLiteral(
+                "CREATE TABLE attachments ("
+                "    id           INTEGER PRIMARY KEY,"
+                "    message_id   INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,"
+                "    filename     TEXT    NOT NULL DEFAULT '',"
+                "    content_type TEXT    NOT NULL DEFAULT '',"
+                "    content_id   TEXT    NOT NULL DEFAULT '',"
+                "    size         INTEGER NOT NULL DEFAULT 0,"
+                "    is_inline    INTEGER NOT NULL DEFAULT 0,"
+                "    data         BLOB"
+                ")"
+            )
+        };
+
+        if (!runMigration(4, QStringLiteral("Add message_bodies and attachments tables"), statements)) {
+            return false;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration 5 — Add to, cc, bcc, and reply-to columns to messages table
+    // -----------------------------------------------------------------------
+    if (current < 5) {
+        const QStringList statements = {
+            QStringLiteral("ALTER TABLE messages ADD COLUMN to_list TEXT NOT NULL DEFAULT ''"),
+            QStringLiteral("ALTER TABLE messages ADD COLUMN cc_list TEXT NOT NULL DEFAULT ''"),
+            QStringLiteral("ALTER TABLE messages ADD COLUMN bcc_list TEXT NOT NULL DEFAULT ''"),
+            QStringLiteral("ALTER TABLE messages ADD COLUMN reply_to TEXT NOT NULL DEFAULT ''")
+        };
+
+        if (!runMigration(5, QStringLiteral("Add to, cc, bcc, and reply-to columns to messages table"), statements)) {
+            return false;
+        }
+    }
+
     // Future migrations: add new `if (current < N)` blocks here.
     // Never modify a migration that has already been applied.
 

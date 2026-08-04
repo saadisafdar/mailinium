@@ -33,5 +33,5 @@ endmacro()
 # ---------------------------------------------------------------------------
 # add_subdirectory(core)
 add_subdirectory(storage)
-# add_subdirectory(protocols)
+add_subdirectory(protocols)
 add_subdirectory(sync)

@@ -3,6 +3,11 @@
 #include "storage/Folder.h"
 #include "storage/Message.h"
 #include "core/Settings.h"
+#include "protocols/MimeParser.h"
+#include <QTimeZone>
+#include <QLocale>
+#include <QRegularExpression>
+#include <QDateTime>
 
 #include <QSslError>
 #include <QStringList>
@@ -393,6 +398,158 @@ void ImapClient::handleSearchResponse(const QByteArray& line)
     }
 }
 
+enum class TokenType {
+    Open,
+    Close,
+    String,
+    Nil,
+    Atom
+};
+
+struct Token {
+    TokenType type;
+    QString value;
+};
+
+static QList<Token> tokenizeSExpr(const QString& str, int startIdx) {
+    QList<Token> tokens;
+    int i = startIdx;
+    int len = str.length();
+    while (i < len) {
+        QChar c = str.at(i);
+        if (c.isSpace()) {
+            i++;
+            continue;
+        }
+        if (c == '(') {
+            tokens.append({TokenType::Open, QStringLiteral("(")});
+            i++;
+        } else if (c == ')') {
+            tokens.append({TokenType::Close, QStringLiteral(")")});
+            i++;
+        } else if (c == '"') {
+            // Read quoted string
+            QString s;
+            i++; // skip open quote
+            while (i < len) {
+                QChar qc = str.at(i);
+                if (qc == '"') {
+                    i++; // skip close quote
+                    break;
+                } else if (qc == '\\' && i + 1 < len) {
+                    s.append(str.at(i + 1));
+                    i += 2;
+                } else {
+                    s.append(qc);
+                    i++;
+                }
+            }
+            tokens.append({TokenType::String, s});
+        } else {
+            // Read atom (NIL, 123, etc.)
+            int start = i;
+            while (i < len) {
+                QChar qc = str.at(i);
+                if (qc.isSpace() || qc == '(' || qc == ')' || qc == '"') {
+                    break;
+                }
+                i++;
+            }
+            QString atom = str.mid(start, i - start);
+            if (atom.toUpper() == QStringLiteral("NIL")) {
+                tokens.append({TokenType::Nil, QString()});
+            } else {
+                tokens.append({TokenType::Atom, atom});
+            }
+        }
+    }
+    return tokens;
+}
+
+struct SNode {
+    TokenType type = TokenType::Nil;
+    QString value; // if String, Atom
+    QList<SNode> children; // if Open (list)
+};
+
+static SNode parseSExpr(const QList<Token>& tokens, int& index) {
+    SNode node;
+    if (index >= tokens.size()) {
+        node.type = TokenType::Nil;
+        return node;
+    }
+    const Token& t = tokens.at(index);
+    if (t.type == TokenType::Open) {
+        node.type = TokenType::Open;
+        index++; // consume '('
+        while (index < tokens.size() && tokens.at(index).type != TokenType::Close) {
+            node.children.append(parseSExpr(tokens, index));
+        }
+        if (index < tokens.size()) {
+            index++; // consume ')'
+        }
+    } else {
+        node.type = t.type;
+        node.value = t.value;
+        index++;
+    }
+    return node;
+}
+
+static QString formatAddressList(const SNode& listNode) {
+    if (listNode.type != TokenType::Open) return QString();
+    QStringList parts;
+    for (const SNode& addr : listNode.children) {
+        if (addr.type == TokenType::Open && addr.children.size() >= 4) {
+            QString name = addr.children[0].value;
+            QString mailbox = addr.children[2].value;
+            QString host = addr.children[3].value;
+            if (mailbox.isEmpty()) continue;
+            
+            QString email = mailbox;
+            if (!host.isEmpty()) {
+                email += QStringLiteral("@") + host;
+            }
+            // Decode display name if encoded using RFC 2047
+            name = MimeParser::decodeHeaderValue(name);
+            
+            if (!name.isEmpty()) {
+                parts.append(QStringLiteral("\"%1\" <%2>").arg(name, email));
+            } else {
+                parts.append(email);
+            }
+        }
+    }
+    return parts.join(QStringLiteral(", "));
+}
+
+static void extractFromAddress(const SNode& fromList, QString& fromName, QString& fromAddress) {
+    if (fromList.type != TokenType::Open || fromList.children.isEmpty()) return;
+    const SNode& addr = fromList.children.first();
+    if (addr.type == TokenType::Open && addr.children.size() >= 4) {
+        fromName = MimeParser::decodeHeaderValue(addr.children[0].value);
+        QString mailbox = addr.children[2].value;
+        QString host = addr.children[3].value;
+        if (!mailbox.isEmpty()) {
+            fromAddress = mailbox;
+            if (!host.isEmpty()) {
+                fromAddress += QStringLiteral("@") + host;
+            }
+        }
+    }
+}
+
+static QDateTime parseRfc2822Date(const QString& str) {
+    QString cleaned = str.simplified();
+    QDateTime dt = QDateTime::fromString(cleaned, Qt::RFC2822Date);
+    if (!dt.isValid()) {
+        dt = QDateTime::currentDateTimeUtc();
+    } else {
+        dt = dt.toTimeZone(QTimeZone::UTC);
+    }
+    return dt;
+}
+
 void ImapClient::handleFetchResponse(const QByteArray& line)
 {
     if (line.startsWith("* ") && line.contains(" FETCH ")) {
@@ -419,23 +576,21 @@ void ImapClient::handleFetchResponse(const QByteArray& line)
             
             int envIdx = line.indexOf("ENVELOPE (");
             if (envIdx != -1) {
-                int firstQuote = line.indexOf('"', envIdx + 10);
-                if (firstQuote != -1) {
-                    int secondQuote = line.indexOf('"', firstQuote + 1); // date
-                    if (secondQuote != -1) {
-                        int thirdQuote = line.indexOf('"', secondQuote + 1);
-                        if (thirdQuote != -1) {
-                            int fourthQuote = line.indexOf('"', thirdQuote + 1); // subject
-                            if (fourthQuote != -1) {
-                                msg.subject = QString::fromUtf8(line.mid(thirdQuote + 1, fourthQuote - thirdQuote - 1));
-                            }
-                        }
-                    }
+                QString envStr = QString::fromUtf8(line.mid(envIdx + 9));
+                QList<Token> tokens = tokenizeSExpr(envStr, 0);
+                int tokensIndex = 0;
+                SNode root = parseSExpr(tokens, tokensIndex);
+                if (root.type == TokenType::Open && root.children.size() >= 10) {
+                    msg.date = parseRfc2822Date(root.children[0].value);
+                    msg.subject = MimeParser::decodeHeaderValue(root.children[1].value);
+                    extractFromAddress(root.children[2], msg.fromName, msg.fromAddress);
+                    msg.replyTo = formatAddressList(root.children[4]);
+                    msg.toList = formatAddressList(root.children[5]);
+                    msg.ccList = formatAddressList(root.children[6]);
+                    msg.bccList = formatAddressList(root.children[7]);
+                    msg.messageId = root.children[9].value;
                 }
             }
-            msg.date = QDateTime::currentDateTimeUtc();
-            msg.fromAddress = QStringLiteral("sender@example.com");
-            msg.fromName = QStringLiteral("Sender");
             
             if (msg.uid > 0) {
                 Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("FETCH parsed header UID: ") + QString::number(msg.uid));

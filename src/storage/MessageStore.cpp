@@ -29,6 +29,10 @@ static Message messageFromQuery(const QSqlQuery& q)
     m.flags       = q.value(9).toInt();
     m.size        = q.value(10).toLongLong();
     m.bodyFetched = q.value(11).toInt() != 0;
+    m.toList      = q.value(12).toString();
+    m.ccList      = q.value(13).toString();
+    m.bccList     = q.value(14).toString();
+    m.replyTo     = q.value(15).toString();
     return m;
 }
 
@@ -36,7 +40,7 @@ static Message messageFromQuery(const QSqlQuery& q)
 static constexpr auto kSelectColumns =
     "SELECT id, folder_id, uid, message_id, thread_id,"
     "       subject, from_address, from_name, date_utc,"
-    "       flags, size, body_fetched"
+    "       flags, size, body_fetched, to_list, cc_list, bcc_list, reply_to"
     "  FROM messages";
 
 // ---------------------------------------------------------------------------
@@ -52,10 +56,10 @@ qint64 MessageStore::insertMessage(const Message& msg)
         "INSERT OR IGNORE INTO messages"
         "    (folder_id, uid, message_id, thread_id,"
         "     subject, from_address, from_name, date_utc,"
-        "     flags, size, body_fetched)"
+        "     flags, size, body_fetched, to_list, cc_list, bcc_list, reply_to)"
         "    VALUES(:folderId, :uid, :messageId, :threadId,"
         "           :subject, :fromAddress, :fromName, :dateUtc,"
-        "           :flags, :size, :bodyFetched)"
+        "           :flags, :size, :bodyFetched, :toList, :ccList, :bccList, :replyTo)"
     ));
 
     q.bindValue(QStringLiteral(":folderId"),    msg.folderId);
@@ -72,6 +76,10 @@ qint64 MessageStore::insertMessage(const Message& msg)
     q.bindValue(QStringLiteral(":flags"),       msg.flags);
     q.bindValue(QStringLiteral(":size"),        msg.size);
     q.bindValue(QStringLiteral(":bodyFetched"), msg.bodyFetched ? 1 : 0);
+    q.bindValue(QStringLiteral(":toList"),      msg.toList.isNull() ? QStringLiteral("") : msg.toList);
+    q.bindValue(QStringLiteral(":ccList"),      msg.ccList.isNull() ? QStringLiteral("") : msg.ccList);
+    q.bindValue(QStringLiteral(":bccList"),     msg.bccList.isNull() ? QStringLiteral("") : msg.bccList);
+    q.bindValue(QStringLiteral(":replyTo"),     msg.replyTo.isNull() ? QStringLiteral("") : msg.replyTo);
 
     if (!q.exec()) {
         Logger::instance().error(QStringLiteral("storage"),
@@ -284,4 +292,128 @@ int MessageStore::unreadCount(qint64 folderId)
     }
 
     return q.value(0).toInt();
+}
+
+// ---------------------------------------------------------------------------
+// Body & Attachments (Phase 4A)
+// ---------------------------------------------------------------------------
+
+bool MessageStore::saveMessageBodies(qint64 messageId, const QString& htmlBody, const QString& plainBody)
+{
+    QSqlQuery q(Database::connection());
+    q.prepare(QStringLiteral(
+        "INSERT INTO message_bodies(message_id, html_body, plain_body)"
+        "    VALUES(:mid, :html, :plain)"
+        "    ON CONFLICT(message_id) DO UPDATE SET"
+        "        html_body = excluded.html_body,"
+        "        plain_body = excluded.plain_body"
+    ));
+    q.bindValue(QStringLiteral(":mid"),   messageId);
+    q.bindValue(QStringLiteral(":html"),  htmlBody.isNull() ? QStringLiteral("") : htmlBody);
+    q.bindValue(QStringLiteral(":plain"), plainBody.isNull() ? QStringLiteral("") : plainBody);
+
+    if (!q.exec()) {
+        Logger::instance().error(QStringLiteral("storage"),
+            QStringLiteral("saveMessageBodies failed for message ") + QString::number(messageId) + ": " + q.lastError().text());
+        return false;
+    }
+
+    markBodyFetched(messageId);
+    return true;
+}
+
+std::pair<QString, QString> MessageStore::getMessageBodies(qint64 messageId)
+{
+    QSqlQuery q(Database::connection());
+    q.prepare(QStringLiteral(
+        "SELECT html_body, plain_body FROM message_bodies WHERE message_id = :mid"
+    ));
+    q.bindValue(QStringLiteral(":mid"), messageId);
+
+    if (!q.exec() || !q.next()) {
+        return { QString(), QString() };
+    }
+
+    return { q.value(0).toString(), q.value(1).toString() };
+}
+
+bool MessageStore::saveAttachment(qint64 messageId, const AttachmentInfo& attachment)
+{
+    QSqlQuery q(Database::connection());
+    q.prepare(QStringLiteral(
+        "INSERT INTO attachments(message_id, filename, content_type, content_id, size, is_inline, data)"
+        "    VALUES(:mid, :filename, :ctype, :cid, :size, :inline, :data)"
+    ));
+    q.bindValue(QStringLiteral(":mid"),      messageId);
+    q.bindValue(QStringLiteral(":filename"), attachment.filename.isNull() ? QStringLiteral("") : attachment.filename);
+    q.bindValue(QStringLiteral(":ctype"),    attachment.contentType.isNull() ? QStringLiteral("") : attachment.contentType);
+    q.bindValue(QStringLiteral(":cid"),      attachment.contentId.isNull() ? QStringLiteral("") : attachment.contentId);
+    q.bindValue(QStringLiteral(":size"),     attachment.size);
+    q.bindValue(QStringLiteral(":inline"),   attachment.isInline ? 1 : 0);
+    q.bindValue(QStringLiteral(":data"),     attachment.data);
+
+    if (!q.exec()) {
+        Logger::instance().error(QStringLiteral("storage"),
+            QStringLiteral("saveAttachment failed for message ") + QString::number(messageId) + ": " + q.lastError().text());
+        return false;
+    }
+
+    return true;
+}
+
+QList<AttachmentInfo> MessageStore::getAttachments(qint64 messageId, bool loadInlineDataOnly)
+{
+    QSqlQuery q(Database::connection());
+    if (loadInlineDataOnly) {
+        q.prepare(QStringLiteral(
+            "SELECT id, message_id, filename, content_type, content_id, size, is_inline, "
+            "       CASE WHEN is_inline = 1 OR (content_id IS NOT NULL AND content_id != '') THEN data ELSE NULL END "
+            "  FROM attachments WHERE message_id = :mid"
+        ));
+    } else {
+        q.prepare(QStringLiteral(
+            "SELECT id, message_id, filename, content_type, content_id, size, is_inline, data "
+            "  FROM attachments WHERE message_id = :mid"
+        ));
+    }
+    q.bindValue(QStringLiteral(":mid"), messageId);
+
+    if (!q.exec()) {
+        Logger::instance().error(QStringLiteral("storage"),
+            QStringLiteral("getAttachments failed for message ") + QString::number(messageId) + ": " + q.lastError().text());
+        return {};
+    }
+
+    QList<AttachmentInfo> list;
+    while (q.next()) {
+        AttachmentInfo att;
+        att.id          = q.value(0).toLongLong();
+        att.messageId   = q.value(1).toLongLong();
+        att.filename    = q.value(2).toString();
+        att.contentType = q.value(3).toString();
+        att.contentId   = q.value(4).toString();
+        att.size        = q.value(5).toLongLong();
+        att.isInline    = q.value(6).toInt() != 0;
+        att.data        = q.value(7).toByteArray();
+        list.append(att);
+    }
+
+    return list;
+}
+
+QByteArray MessageStore::getAttachmentData(qint64 attachmentId)
+{
+    QSqlQuery q(Database::connection());
+    q.prepare(QStringLiteral(
+        "SELECT data FROM attachments WHERE id = :id"
+    ));
+    q.bindValue(QStringLiteral(":id"), attachmentId);
+
+    if (!q.exec() || !q.next()) {
+        Logger::instance().error(QStringLiteral("storage"),
+            QStringLiteral("getAttachmentData failed for id ") + QString::number(attachmentId));
+        return {};
+    }
+
+    return q.value(0).toByteArray();
 }

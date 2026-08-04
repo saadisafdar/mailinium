@@ -4,6 +4,7 @@ set(SYNC_SOURCES
     "${CMAKE_SOURCE_DIR}/src/core/SyncWorker.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/SyncManager.cpp"
     "${CMAKE_SOURCE_DIR}/src/network/ImapClient.cpp"
+    "${CMAKE_SOURCE_DIR}/src/protocols/MimeParser.cpp"
     "${CMAKE_SOURCE_DIR}/src/auth/GoogleOAuth.cpp"
     "${CMAKE_SOURCE_DIR}/src/storage/Database.cpp"
     "${CMAKE_SOURCE_DIR}/src/storage/AccountStore.cpp"

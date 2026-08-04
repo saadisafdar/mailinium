@@ -7,6 +7,7 @@
 
 #include <QStandardPaths>
 #include <QDir>
+#include <QTimer>
 
 // ---------------------------------------------------------------------------
 // Constructor — strict initialization order:
@@ -58,11 +59,13 @@ void Application::initializeCore()
     Settings::instance().initialize(dataDir);
     Logger::instance().info(QStringLiteral("core"), QStringLiteral("Settings loaded"));
 
+    // Open database synchronously to ensure stores can query it during UI initialization
     const QString dbPath = dataDir + QStringLiteral("/mailinium.db");
     if (!Database::instance().open(dbPath)) {
         Logger::instance().critical(QStringLiteral("core"),
             QStringLiteral("Failed to open database — storage is unavailable"));
-        // Continue without storage for now; Phase 3B will surface this to the user.
+    } else {
+        Logger::instance().info(QStringLiteral("core"), QStringLiteral("Database opened successfully"));
     }
 
     ThemeManager::instance().initialize();

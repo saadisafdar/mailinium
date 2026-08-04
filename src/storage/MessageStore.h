@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Message.h"
+#include "protocols/MimeMessage.h"
 
 #include <optional>
 #include <QList>
+#include <utility>
 
 //
 // MessageStore — creates, reads, updates and deletes messages in the database.
@@ -50,4 +52,12 @@ public:
 
     int messageCount(qint64 folderId);
     int unreadCount(qint64 folderId);
+
+    // --- Message Body & Attachments (Phase 4A) ------------------------------
+    bool saveMessageBodies(qint64 messageId, const QString& htmlBody, const QString& plainBody);
+    std::pair<QString, QString> getMessageBodies(qint64 messageId);
+
+    bool saveAttachment(qint64 messageId, const AttachmentInfo& attachment);
+    QList<AttachmentInfo> getAttachments(qint64 messageId, bool loadInlineDataOnly = false);
+    QByteArray getAttachmentData(qint64 attachmentId);
 };

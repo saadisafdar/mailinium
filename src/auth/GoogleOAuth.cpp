@@ -310,7 +310,9 @@ void GoogleOAuth::loadCredentials()
     // Try to load from the executable's config folder first, then the current working directory's config folder
     QStringList paths = {
         QCoreApplication::applicationDirPath() + QStringLiteral("/config/oauth.json"),
-        QCoreApplication::applicationDirPath() + QStringLiteral("/../config/oauth.json"), // When running from build/bin/Debug
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../config/oauth.json"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../../config/oauth.json"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../../../config/oauth.json"), // When running from build/bin/Debug or similar
         QDir::currentPath() + QStringLiteral("/config/oauth.json")
     };
     

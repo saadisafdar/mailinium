@@ -3,6 +3,7 @@
 #include "storage/FolderStore.h"
 #include "storage/AccountStore.h"
 #include "storage/MessageStore.h"
+#include "protocols/MimeParser.h"
 #include "auth/GoogleOAuth.h"
 #include "core/Logger.h"
 
@@ -271,14 +272,25 @@ void SyncWorker::onHeadersFetched(const QList<Message>& messages)
 
 void SyncWorker::onBodyFetched(qint64 uid, const QString& body)
 {
-    // Phase 3C: we just emit it for the view. We'll persist in Phase 3E.
     MessageStore store;
     auto optMsg = store.messageByUid(m_currentSyncFolderId, uid);
     qint64 msgId = m_currentFetchMessageId;
     if (optMsg.has_value()) {
         msgId = optMsg->id;
-        store.markBodyFetched(msgId);
     }
     
+    // Parse raw MIME payload
+    MimeMessage mime = MimeParser::parse(body.toUtf8());
+    
+    if (msgId != -1) {
+        store.saveMessageBodies(msgId, mime.htmlBody, mime.plainBody);
+        for (const auto& att : mime.attachments) {
+            store.saveAttachment(msgId, att);
+        }
+        for (const auto& img : mime.inlineImages) {
+            store.saveAttachment(msgId, img);
+        }
+    }
+
     emit messageBodyReady(msgId, body);
 }

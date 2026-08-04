@@ -29,6 +29,17 @@ find_package(Qt6 REQUIRED COMPONENTS
     Test
 )
 
+find_package(Qt6 OPTIONAL_COMPONENTS
+    WebEngineWidgets
+)
+
+if(Qt6WebEngineWidgets_FOUND)
+    message(STATUS "Mailinium: Qt WebEngineWidgets found — enabling QWebEngineView HTML renderer")
+    add_compile_definitions(MAILINIUM_HAS_WEBENGINE)
+else()
+    message(STATUS "Mailinium: Qt WebEngineWidgets NOT found — falling back to QTextBrowser HTML renderer")
+endif()
+
 message(STATUS "Mailinium: Qt version ${Qt6_VERSION}")
 
 # Enforce minimum Qt version

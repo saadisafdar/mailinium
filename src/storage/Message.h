@@ -39,6 +39,10 @@ struct Message {
     QString   subject;
     QString   fromAddress;            // bare email address
     QString   fromName;               // display name from the From header
+    QString   toList;                 // Comma separated list of To recipients
+    QString   ccList;                 // Comma separated list of Cc recipients
+    QString   bccList;                // Comma separated list of Bcc recipients
+    QString   replyTo;                // Reply-To header value
     QDateTime date;                   // sent time, UTC
     int       flags       = 0;        // MessageFlags bitmask
     qint64    size        = 0;        // RFC 822 size in bytes

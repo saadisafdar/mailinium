@@ -465,12 +465,23 @@ void MainWindow::onFolderSelected(qint64 accountId, qint64 folderId)
 
 void MainWindow::onMessageSelected(qint64 messageId)
 {
-    // Retrieve the message to get its folderId and basic data
     MessageStore store;
     auto optMsg = store.messageById(messageId);
     if (!optMsg.has_value()) return;
+
+    // [OPTIMIZATION] Check memory view cache first (refreshing with latest metadata)
+    if (m_messageView->loadFromCache(messageId, optMsg.value())) {
+        Logger::instance().debug(QStringLiteral("ui"), QStringLiteral("Message loaded from memory view cache: ") + QString::number(messageId));
+        return;
+    }
     
-    // We also need the account ID to route to the correct worker
+    if (optMsg->bodyFetched) {
+        auto bodies = store.getMessageBodies(messageId);
+        auto attachments = store.getAttachments(messageId, true); // true = load inline image blobs only!
+        m_messageView->displayMimeMessage(optMsg.value(), bodies.first, bodies.second, attachments);
+        return;
+    }
+
     FolderStore fstore;
     auto optFolder = fstore.folderById(optMsg->folderId);
     if (!optFolder.has_value()) return;
@@ -481,7 +492,6 @@ void MainWindow::onMessageSelected(qint64 messageId)
 void MainWindow::onMessagesUpdated(qint64 accountId, qint64 folderId)
 {
     Q_UNUSED(accountId);
-    // The list panel can just reload from DB if it is showing this folder
     m_messageList->loadMessages(folderId);
 }
 
@@ -491,7 +501,14 @@ void MainWindow::onMessageBodyReady(qint64 accountId, qint64 messageId, const QS
     MessageStore store;
     auto optMsg = store.messageById(messageId);
     if (optMsg.has_value()) {
-        m_messageView->displayMessage(optMsg.value(), body);
+        auto bodies = store.getMessageBodies(messageId);
+        auto attachments = store.getAttachments(messageId, true); // true = load inline image blobs only!
+
+        if (!bodies.first.isEmpty() || !bodies.second.isEmpty()) {
+            m_messageView->displayMimeMessage(optMsg.value(), bodies.first, bodies.second, attachments);
+        } else {
+            m_messageView->displayMessage(optMsg.value(), body);
+        }
     }
 }
 
