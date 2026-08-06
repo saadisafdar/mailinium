@@ -41,6 +41,7 @@ private slots:
             QStringLiteral("accounts"),
             QStringLiteral("folders"),
             QStringLiteral("messages"),
+            QStringLiteral("drafts"),
         };
 
         QSqlQuery q(Database::connection());
@@ -85,13 +86,13 @@ private slots:
                  "idx_messages_thread missing");
     }
 
-    void migrationVersion_isFive()
+    void migrationVersion_isSeven()
     {
         QSqlQuery q(Database::connection());
         QVERIFY(q.exec(QStringLiteral(
             "SELECT MAX(version) FROM schema_migrations")));
         QVERIFY(q.next());
-        QCOMPARE(q.value(0).toInt(), 5);
+        QCOMPARE(q.value(0).toInt(), 7);
     }
 
     void foreignKeysEnabled()

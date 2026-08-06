@@ -26,6 +26,8 @@ set(MAILINIUM_SOURCES
     core/SyncManager.cpp
     core/SyncWorker.h
     core/SyncWorker.cpp
+    core/SmtpSendJob.h
+    core/SmtpSendJob.cpp
 
     # ui/
     ui/MainWindow.h
@@ -34,6 +36,8 @@ set(MAILINIUM_SOURCES
     ui/AccountSidebar.cpp
     ui/AccountSetupWizard.h
     ui/AccountSetupWizard.cpp
+    ui/DraftsDialog.h
+    ui/DraftsDialog.cpp
     ui/MessageListPanel.h
     ui/MessageListPanel.cpp
     ui/MessageViewPanel.h
@@ -44,23 +48,30 @@ set(MAILINIUM_SOURCES
     ui/HtmlSanitizer.cpp
     ui/AttachmentBar.h
     ui/AttachmentBar.cpp
+    ui/ComposeWindow.h
+    ui/ComposeWindow.cpp
 
     # protocols/
     protocols/MimeMessage.h
     protocols/MimeParser.h
     protocols/MimeParser.cpp
-    
+    protocols/MimeBuilder.h
+    protocols/MimeBuilder.cpp
+    protocols/smtp/SmtpClient.h
+    protocols/smtp/SmtpClient.cpp
+
     # network/
     network/ImapClient.h
     network/ImapClient.cpp
-    
+
     # auth/
     auth/GoogleOAuth.h
     auth/GoogleOAuth.cpp
-    
+
     # storage/
     storage/Folder.h
     storage/Message.h
+    storage/Draft.h
     storage/Database.h
     storage/Database.cpp
     storage/Account.h
@@ -70,6 +81,8 @@ set(MAILINIUM_SOURCES
     storage/FolderStore.cpp
     storage/MessageStore.h
     storage/MessageStore.cpp
+    storage/DraftStore.h
+    storage/DraftStore.cpp
 )
 
 set(MAILINIUM_RESOURCES

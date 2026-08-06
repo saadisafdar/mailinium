@@ -384,6 +384,51 @@ bool Database::runMigrations()
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Migration 6 — Add local drafts table
+    // -----------------------------------------------------------------------
+    if (current < 6) {
+        const QStringList statements = {
+            QStringLiteral(
+                "CREATE TABLE drafts ("
+                "    id           INTEGER PRIMARY KEY,"
+                "    account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,"
+                "    subject      TEXT    NOT NULL DEFAULT '',"
+                "    to_list      TEXT    NOT NULL DEFAULT '',"
+                "    cc_list      TEXT    NOT NULL DEFAULT '',"
+                "    bcc_list     TEXT    NOT NULL DEFAULT '',"
+                "    body_html    TEXT    NOT NULL DEFAULT '',"
+                "    body_plain   TEXT    NOT NULL DEFAULT '',"
+                "    in_reply_to  TEXT    NOT NULL DEFAULT '',"
+                "    \"references\" TEXT  NOT NULL DEFAULT '',"
+                "    created_at   TEXT    NOT NULL,"
+                "    updated_at   TEXT    NOT NULL"
+                ")"
+            ),
+            QStringLiteral(
+                "CREATE INDEX idx_drafts_account "
+                "    ON drafts(account_id, updated_at DESC)"
+            )
+        };
+
+        if (!runMigration(6, QStringLiteral("Add local drafts table"), statements)) {
+            return false;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration 7 — Add attachments column to drafts table
+    // -----------------------------------------------------------------------
+    if (current < 7) {
+        const QStringList statements = {
+            QStringLiteral("ALTER TABLE drafts ADD COLUMN attachments TEXT NOT NULL DEFAULT ''")
+        };
+
+        if (!runMigration(7, QStringLiteral("Add attachments column to drafts table"), statements)) {
+            return false;
+        }
+    }
+
     // Future migrations: add new `if (current < N)` blocks here.
     // Never modify a migration that has already been applied.
 

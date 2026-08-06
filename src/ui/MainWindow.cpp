@@ -4,6 +4,8 @@
 #include "MessageListPanel.h"
 #include "MessageViewPanel.h"
 #include "SettingsDialog.h"
+#include "ComposeWindow.h"
+#include "DraftsDialog.h"
 #include "../core/Logger.h"
 #include "../core/Settings.h"
 #include "../core/ThemeManager.h"
@@ -76,6 +78,9 @@ void MainWindow::setupActions()
     m_actNewMessage = new QAction(tr("New Message"), this);
     m_actNewMessage->setShortcut(QKeySequence::New);
     m_actNewMessage->setStatusTip(tr("Compose a new email message"));
+
+    m_actDrafts = new QAction(tr("Drafts"), this);
+    m_actDrafts->setStatusTip(tr("View saved drafts"));
 
     m_actAddAccount = new QAction(tr("Add Account..."), this);
     connect(m_actAddAccount, &QAction::triggered, this, &MainWindow::onAddAccount);
@@ -160,14 +165,17 @@ void MainWindow::setupActions()
     m_actReply = new QAction(tr("Reply"), this);
     m_actReply->setShortcut(Qt::CTRL | Qt::Key_R);
     m_actReply->setEnabled(false);
+    connect(m_actReply, &QAction::triggered, this, &MainWindow::onReply);
 
     m_actReplyAll = new QAction(tr("Reply All"), this);
     m_actReplyAll->setShortcut(Qt::CTRL | Qt::SHIFT | Qt::Key_R);
     m_actReplyAll->setEnabled(false);
+    connect(m_actReplyAll, &QAction::triggered, this, &MainWindow::onReplyAll);
 
     m_actForward = new QAction(tr("Forward"), this);
     m_actForward->setShortcut(Qt::CTRL | Qt::SHIFT | Qt::Key_F);
     m_actForward->setEnabled(false);
+    connect(m_actForward, &QAction::triggered, this, &MainWindow::onForward);
 
     m_actArchive = new QAction(tr("Archive"), this);
     m_actArchive->setShortcut(Qt::Key_E);
@@ -201,6 +209,7 @@ void MainWindow::setupMenuBar()
     // File
     QMenu* fileMenu = menuBar()->addMenu(tr("&File"));
     fileMenu->addAction(m_actNewMessage);
+    fileMenu->addAction(m_actDrafts);
     fileMenu->addSeparator();
     fileMenu->addAction(m_actAddAccount);
     fileMenu->addSeparator();
@@ -271,6 +280,8 @@ void MainWindow::setupToolBar()
     toolbar->addSeparator();
     toolbar->addAction(m_actReply);
     toolbar->addAction(m_actForward);
+    toolbar->addSeparator();
+    toolbar->addAction(m_actDrafts);
     toolbar->addSeparator();
     toolbar->addAction(m_actArchive);
     toolbar->addAction(m_actDelete);
@@ -348,8 +359,9 @@ void MainWindow::connectSignals()
 
     // File actions
     connect(m_actNewMessage, &QAction::triggered, this, &MainWindow::onNewMessage);
-    connect(m_actSettings, &QAction::triggered, this, &MainWindow::onSettings);
-    connect(m_actQuit,     &QAction::triggered, qApp,  &QApplication::quit);
+    connect(m_actDrafts,     &QAction::triggered, this, &MainWindow::onDrafts);
+    connect(m_actSettings,   &QAction::triggered, this, &MainWindow::onSettings);
+    connect(m_actQuit,       &QAction::triggered, qApp, &QApplication::quit);
 
     // View: density
     connect(m_actDensityCompact, &QAction::triggered, this, [this] {
@@ -458,6 +470,7 @@ void MainWindow::onFoldersUpdated(qint64 accountId)
 
 void MainWindow::onFolderSelected(qint64 accountId, qint64 folderId)
 {
+    m_currentAccountId = accountId; // Track for drafts
     Logger::instance().info(QStringLiteral("ui"), QStringLiteral("MainWindow folder selected: ") + QString::number(folderId));
     m_messageList->loadMessages(folderId);
     SyncManager::instance().syncFolder(accountId, folderId);
@@ -469,12 +482,20 @@ void MainWindow::onMessageSelected(qint64 messageId)
     auto optMsg = store.messageById(messageId);
     if (!optMsg.has_value()) return;
 
+    // Track for reply/forward context
+    m_currentMessage = optMsg;
+
+    // Enable message context actions
+    m_actReply->setEnabled(true);
+    m_actReplyAll->setEnabled(true);
+    m_actForward->setEnabled(true);
+
     // [OPTIMIZATION] Check memory view cache first (refreshing with latest metadata)
     if (m_messageView->loadFromCache(messageId, optMsg.value())) {
         Logger::instance().debug(QStringLiteral("ui"), QStringLiteral("Message loaded from memory view cache: ") + QString::number(messageId));
         return;
     }
-    
+
     if (optMsg->bodyFetched) {
         auto bodies = store.getMessageBodies(messageId);
         auto attachments = store.getAttachments(messageId, true); // true = load inline image blobs only!
@@ -485,7 +506,7 @@ void MainWindow::onMessageSelected(qint64 messageId)
     FolderStore fstore;
     auto optFolder = fstore.folderById(optMsg->folderId);
     if (!optFolder.has_value()) return;
-    
+
     SyncManager::instance().fetchMessageBody(optFolder->accountId, optMsg->folderId, messageId);
 }
 
@@ -515,8 +536,20 @@ void MainWindow::onMessageBodyReady(qint64 accountId, qint64 messageId, const QS
 void MainWindow::onNewMessage()
 {
     Logger::instance().info(QStringLiteral("ui"), QStringLiteral("New message requested"));
-    // Future: open composer window
-    showStatusMessage(QStringLiteral("New message triggered"), 2000);
+
+    // Find the first available account
+    AccountStore astore;
+    const auto accounts = astore.allAccounts();
+    if (accounts.isEmpty()) {
+        QMessageBox::information(this, tr("No Account"),
+            tr("Please add an email account first."));
+        return;
+    }
+
+    const Account& acc = accounts.first();
+    auto* w = new ComposeWindow(acc, this);
+    w->setAttribute(Qt::WA_DeleteOnClose);
+    w->show();
 }
 
 void MainWindow::onAddAccount()
@@ -586,6 +619,100 @@ void MainWindow::showStatusMessage(const QString& message, int timeoutMs)
 void MainWindow::setSyncStatus(const QString& status)
 {
     m_syncLabel->setText(status);
+}
+
+// ---------------------------------------------------------------------------
+// Reply / ReplyAll / Forward
+// ---------------------------------------------------------------------------
+
+static Account findAccountForMessage(const Message& msg)
+{
+    // Find the account owning the folder that contains this message
+    FolderStore fs;
+    const auto optFolder = fs.folderById(msg.folderId);
+    if (!optFolder.has_value()) return {};
+
+    AccountStore as;
+    const auto optAcc = as.accountById(optFolder->accountId);
+    return optAcc.value_or(Account{});
+}
+
+static QString getPlainBodyForMessage(qint64 messageId)
+{
+    MessageStore ms;
+    const auto bodies = ms.getMessageBodies(messageId);
+    return bodies.second.isEmpty() ? bodies.first : bodies.second;
+}
+
+void MainWindow::onReply()
+{
+    if (!m_currentMessage.has_value()) return;
+    const Message& msg = m_currentMessage.value();
+    const Account acc  = findAccountForMessage(msg);
+    if (acc.id == -1) {
+        Logger::instance().error(QStringLiteral("ui"),
+            QStringLiteral("onReply: could not find account for message"));
+        return;
+    }
+
+    const QString body = getPlainBodyForMessage(msg.id);
+    auto* w = ComposeWindow::createReply(acc, msg, body, this);
+    w->setAttribute(Qt::WA_DeleteOnClose);
+    w->show();
+}
+
+void MainWindow::onReplyAll()
+{
+    if (!m_currentMessage.has_value()) return;
+    const Message& msg = m_currentMessage.value();
+    const Account acc  = findAccountForMessage(msg);
+    if (acc.id == -1) return;
+
+    const QString body = getPlainBodyForMessage(msg.id);
+    auto* w = ComposeWindow::createReplyAll(acc, msg, body, this);
+    w->setAttribute(Qt::WA_DeleteOnClose);
+    w->show();
+}
+
+void MainWindow::onForward()
+{
+    if (!m_currentMessage.has_value()) return;
+    const Message& msg = m_currentMessage.value();
+    const Account acc  = findAccountForMessage(msg);
+    if (acc.id == -1) return;
+
+    const QString body = getPlainBodyForMessage(msg.id);
+    auto* w = ComposeWindow::createForward(acc, msg, body, this);
+    w->setAttribute(Qt::WA_DeleteOnClose);
+    w->show();
+}
+
+void MainWindow::onDrafts()
+{
+    if (m_currentAccountId == -1) {
+        QMessageBox::information(this, tr("No Account"), tr("Please select an account first."));
+        return;
+    }
+
+    AccountStore store;
+    auto optAcc = store.accountById(m_currentAccountId);
+    if (!optAcc) return;
+
+    auto* dialog = new DraftsDialog(*optAcc, this);
+    connect(dialog, &DraftsDialog::draftResumed, this, &MainWindow::onResumeDraft);
+    dialog->exec();
+    dialog->deleteLater();
+}
+
+void MainWindow::onResumeDraft(const Draft& draft)
+{
+    AccountStore store;
+    auto optAcc = store.accountById(draft.accountId);
+    if (!optAcc) return;
+
+    auto* w = new ComposeWindow(*optAcc, this);
+    w->loadDraft(draft);
+    w->show();
 }
 
 // ---------------------------------------------------------------------------

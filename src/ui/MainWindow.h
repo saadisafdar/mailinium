@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QMainWindow>
+#include <optional>
+#include "storage/Draft.h"
+#include "storage/Message.h"
 
 class QAction;
 class QActionGroup;
@@ -59,6 +62,11 @@ protected:
 
 private slots:
     void onNewMessage();
+    void onDrafts();
+    void onResumeDraft(const Draft& draft);
+    void onReply();
+    void onReplyAll();
+    void onForward();
     void onAddAccount();
     void onSettings();
     void onAbout();
@@ -96,10 +104,15 @@ private:
     // -----------------------------------------------------------------------
     SettingsDialog* m_settingsDialog = nullptr;
 
+    // Currently selected message (for Reply/Forward context)
+    std::optional<Message> m_currentMessage;
+    qint64 m_currentAccountId = -1;
+
     // -----------------------------------------------------------------------
     // File menu
     // -----------------------------------------------------------------------
     QAction* m_actNewMessage  = nullptr;
+    QAction* m_actDrafts      = nullptr;
     QAction* m_actAddAccount  = nullptr;
     QAction* m_actSettings    = nullptr;
     QAction* m_actQuit        = nullptr;

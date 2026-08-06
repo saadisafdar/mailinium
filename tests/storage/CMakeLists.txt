@@ -11,6 +11,7 @@ set(STORAGE_SOURCES
     "${CMAKE_SOURCE_DIR}/src/storage/AccountStore.cpp"
     "${CMAKE_SOURCE_DIR}/src/storage/FolderStore.cpp"
     "${CMAKE_SOURCE_DIR}/src/storage/MessageStore.cpp"
+    "${CMAKE_SOURCE_DIR}/src/storage/DraftStore.cpp"
 )
 
 mailinium_add_test(
@@ -34,5 +35,11 @@ mailinium_add_test(
 mailinium_add_test(
     NAME MessageStoreTest
     SOURCES MessageStoreTest.cpp ${STORAGE_SOURCES}
+    LINKS Qt6::Sql Qt6::Widgets
+)
+
+mailinium_add_test(
+    NAME DraftStoreTest
+    SOURCES DraftStoreTest.cpp ${STORAGE_SOURCES}
     LINKS Qt6::Sql Qt6::Widgets
 )
