@@ -323,4 +323,21 @@ bool MessageViewPanel::loadFromCache(qint64 messageId, const Message& latestMsg)
     return true;
 }
 
+void MessageViewPanel::clear()
+{
+    m_placeholderMsg->show();
+    m_headerArea->hide();
+#ifdef MAILINIUM_HAS_WEBENGINE
+    if (m_webView) {
+        m_webView->hide();
+        m_webView->setHtml(QString());
+    }
+#else
+    if (m_textBrowser) {
+        m_textBrowser->hide();
+        m_textBrowser->clear();
+    }
+#endif
+}
+
 #include "MessageViewPanel.moc"

@@ -3,17 +3,13 @@
 #include <QWidget>
 
 class QLabel;
+class QLineEdit;
 class QListWidget;
 
 //
 // MessageListPanel — center-left pane showing the message list for a folder.
 //
-// Phase 3: structural shell with:
-//   - A header bar (will show folder name and sort/filter controls in Phase 3E)
-//   - An empty state placeholder (replaced by QListView + MessageListModel in Phase 3E)
-//
-// The header bar is created now so the three-pane layout has consistent
-// visual weight even before messages are shown.
+// Phase 4C: adds a search bar (FTS5-backed) and batch selection support.
 //
 class MessageListPanel : public QWidget
 {
@@ -24,19 +20,28 @@ public:
     ~MessageListPanel() override;
 
     void loadMessages(qint64 folderId);
+    qint64 currentFolderId() const { return m_currentFolderId; }
+
+    // Returns ids of all currently selected messages.
+    QList<qint64> selectedMessageIds() const;
 
 signals:
     void messageSelected(qint64 messageId);
+    // Emitted when multi-selection changes (for batch action enabling)
+    void selectionChanged(const QList<qint64>& selectedIds);
 
 private slots:
     void onSelectionChanged();
+    void onSearchTextChanged(const QString& text);
 
 private:
     void setupUi();
+    void populateList(const QList<struct Message>& messages);
 
     QWidget*     m_headerBar      = nullptr;
-    QLabel*      m_folderLabel    = nullptr; // shows selected folder name
-    QLabel*      m_placeholderMsg = nullptr; // empty state
+    QLabel*      m_folderLabel    = nullptr;
+    QLineEdit*   m_searchBox      = nullptr;
+    QLabel*      m_placeholderMsg = nullptr;
     QListWidget* m_messageList    = nullptr;
     
     qint64 m_currentFolderId = -1;

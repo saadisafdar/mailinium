@@ -84,6 +84,62 @@ void SyncManager::fetchMessageBody(qint64 accountId, qint64 folderId, qint64 mes
     }
 }
 
+void SyncManager::deleteMessage(qint64 accountId, qint64 folderId, qint64 messageId)
+{
+    auto* worker = workerForAccount(accountId);
+    if (worker) {
+        worker->deleteMessage(folderId, messageId);
+    }
+}
+
+void SyncManager::archiveMessage(qint64 accountId, qint64 folderId, qint64 messageId)
+{
+    auto* worker = workerForAccount(accountId);
+    if (worker) {
+        worker->archiveMessage(folderId, messageId);
+    }
+}
+
+void SyncManager::markMessageRead(qint64 accountId, qint64 folderId, qint64 messageId, bool read)
+{
+    auto* worker = workerForAccount(accountId);
+    if (worker) {
+        worker->markMessageRead(folderId, messageId, read);
+    }
+}
+
+void SyncManager::starMessage(qint64 accountId, qint64 folderId, qint64 messageId, bool starred)
+{
+    auto* worker = workerForAccount(accountId);
+    if (worker) {
+        worker->starMessage(folderId, messageId, starred);
+    }
+}
+
+void SyncManager::moveMessage(qint64 accountId, qint64 sourceFolderId, qint64 destFolderId, qint64 messageId)
+{
+    auto* worker = workerForAccount(accountId);
+    if (worker) {
+        worker->moveMessage(sourceFolderId, destFolderId, messageId);
+    }
+}
+
+void SyncManager::copyMessage(qint64 accountId, qint64 sourceFolderId, qint64 destFolderId, qint64 messageId)
+{
+    auto* worker = workerForAccount(accountId);
+    if (worker) {
+        worker->copyMessage(sourceFolderId, destFolderId, messageId);
+    }
+}
+
+void SyncManager::refreshFolder(qint64 accountId, qint64 folderId)
+{
+    auto* worker = workerForAccount(accountId);
+    if (worker) {
+        worker->refreshFolder(folderId);
+    }
+}
+
 void SyncManager::onWorkerFoldersUpdated()
 {
     auto* worker = qobject_cast<SyncWorker*>(sender());

@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "FolderPickerDialog.h"
 #include <QMessageBox>
 #include "AccountSidebar.h"
 #include "MessageListPanel.h"
@@ -181,18 +182,56 @@ void MainWindow::setupActions()
     m_actArchive->setShortcut(Qt::Key_E);
     m_actArchive->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     m_actArchive->setEnabled(false);
+    connect(m_actArchive, &QAction::triggered, this, &MainWindow::onArchiveMessage);
 
     m_actDelete = new QAction(tr("Delete"), this);
     m_actDelete->setShortcut(QKeySequence::Delete);
     m_actDelete->setEnabled(false);
+    connect(m_actDelete, &QAction::triggered, this, &MainWindow::onDeleteMessage);
 
     m_actMarkRead = new QAction(tr("Mark as Read"), this);
     m_actMarkRead->setShortcut(Qt::SHIFT | Qt::Key_I);
     m_actMarkRead->setEnabled(false);
+    connect(m_actMarkRead, &QAction::triggered, this, &MainWindow::onMarkRead);
 
     m_actMarkUnread = new QAction(tr("Mark as Unread"), this);
     m_actMarkUnread->setShortcut(Qt::SHIFT | Qt::Key_U);
     m_actMarkUnread->setEnabled(false);
+    connect(m_actMarkUnread, &QAction::triggered, this, &MainWindow::onMarkUnread);
+
+    m_actToggleStar = new QAction(tr("Toggle Star"), this);
+    m_actToggleStar->setShortcut(Qt::Key_S);
+    m_actToggleStar->setEnabled(false);
+    connect(m_actToggleStar, &QAction::triggered, this, &MainWindow::onToggleStar);
+
+    m_actMove = new QAction(tr("Move Message..."), this);
+    m_actMove->setShortcut(Qt::Key_M);
+    m_actMove->setEnabled(false);
+    connect(m_actMove, &QAction::triggered, this, &MainWindow::onMoveMessage);
+
+    m_actCopy = new QAction(tr("Copy Message..."), this);
+    m_actCopy->setShortcut(Qt::Key_C);
+    m_actCopy->setEnabled(false);
+    connect(m_actCopy, &QAction::triggered, this, &MainWindow::onCopyMessage);
+
+    m_actRefresh = new QAction(tr("Refresh Folder"), this);
+    m_actRefresh->setShortcut(QKeySequence::Refresh);
+    m_actRefresh->setEnabled(true);
+    connect(m_actRefresh, &QAction::triggered, this, &MainWindow::onRefreshFolder);
+
+    // --- Batch operations (Phase 4C) ----------------------------------------
+
+    m_actBatchDelete = new QAction(tr("Delete Selected"), this);
+    m_actBatchDelete->setEnabled(false);
+    connect(m_actBatchDelete, &QAction::triggered, this, &MainWindow::onBatchDelete);
+
+    m_actBatchArchive = new QAction(tr("Archive Selected"), this);
+    m_actBatchArchive->setEnabled(false);
+    connect(m_actBatchArchive, &QAction::triggered, this, &MainWindow::onBatchArchive);
+
+    m_actBatchMarkRead = new QAction(tr("Mark Selected as Read"), this);
+    m_actBatchMarkRead->setEnabled(false);
+    connect(m_actBatchMarkRead, &QAction::triggered, this, &MainWindow::onBatchMarkRead);
 
     // --- Help ---------------------------------------------------------------
 
@@ -257,6 +296,16 @@ void MainWindow::setupMenuBar()
     messageMenu->addSeparator();
     messageMenu->addAction(m_actMarkRead);
     messageMenu->addAction(m_actMarkUnread);
+    messageMenu->addAction(m_actToggleStar);
+    messageMenu->addSeparator();
+    messageMenu->addAction(m_actMove);
+    messageMenu->addAction(m_actCopy);
+    messageMenu->addSeparator();
+    messageMenu->addAction(m_actRefresh);
+    messageMenu->addSeparator();
+    messageMenu->addAction(m_actBatchDelete);
+    messageMenu->addAction(m_actBatchArchive);
+    messageMenu->addAction(m_actBatchMarkRead);
 
     // Help
     QMenu* helpMenu = menuBar()->addMenu(tr("&Help"));
@@ -277,6 +326,7 @@ void MainWindow::setupToolBar()
     toolbar->setIconSize(QSize(16, 16));
 
     toolbar->addAction(m_actNewMessage);
+    toolbar->addAction(m_actRefresh);
     toolbar->addSeparator();
     toolbar->addAction(m_actReply);
     toolbar->addAction(m_actForward);
@@ -405,6 +455,15 @@ void MainWindow::connectSignals()
             
     // Message List
     connect(m_messageList, &MessageListPanel::messageSelected, this, &MainWindow::onMessageSelected);
+    connect(m_messageList, &MessageListPanel::selectionChanged, this, &MainWindow::onSelectionChanged);
+
+    // Find — focus the search bar in the message list
+    connect(m_actFind, &QAction::triggered, this, [this] {
+        m_actFind->setEnabled(true); // keep enabled
+        // We hook into the message list panel
+        m_messageList->setFocus(Qt::ShortcutFocusReason);
+    });
+    m_actFind->setEnabled(true);
 
     // Help
     connect(m_actAbout, &QAction::triggered, this, &MainWindow::onAbout);
@@ -471,6 +530,11 @@ void MainWindow::onFoldersUpdated(qint64 accountId)
 void MainWindow::onFolderSelected(qint64 accountId, qint64 folderId)
 {
     m_currentAccountId = accountId; // Track for drafts
+    m_currentMessage = std::nullopt;
+    m_selectedMessageIds.clear();
+
+    disableMessageActions();
+
     Logger::instance().info(QStringLiteral("ui"), QStringLiteral("MainWindow folder selected: ") + QString::number(folderId));
     m_messageList->loadMessages(folderId);
     SyncManager::instance().syncFolder(accountId, folderId);
@@ -489,6 +553,13 @@ void MainWindow::onMessageSelected(qint64 messageId)
     m_actReply->setEnabled(true);
     m_actReplyAll->setEnabled(true);
     m_actForward->setEnabled(true);
+    m_actArchive->setEnabled(true);
+    m_actDelete->setEnabled(true);
+    m_actMarkRead->setEnabled(true);
+    m_actMarkUnread->setEnabled(true);
+    m_actToggleStar->setEnabled(true);
+    m_actMove->setEnabled(true);
+    m_actCopy->setEnabled(true);
 
     // [OPTIMIZATION] Check memory view cache first (refreshing with latest metadata)
     if (m_messageView->loadFromCache(messageId, optMsg.value())) {
@@ -621,6 +692,23 @@ void MainWindow::setSyncStatus(const QString& status)
     m_syncLabel->setText(status);
 }
 
+void MainWindow::disableMessageActions()
+{
+    m_actReply->setEnabled(false);
+    m_actReplyAll->setEnabled(false);
+    m_actForward->setEnabled(false);
+    m_actArchive->setEnabled(false);
+    m_actDelete->setEnabled(false);
+    m_actMarkRead->setEnabled(false);
+    m_actMarkUnread->setEnabled(false);
+    m_actToggleStar->setEnabled(false);
+    m_actMove->setEnabled(false);
+    m_actCopy->setEnabled(false);
+    m_actBatchDelete->setEnabled(false);
+    m_actBatchArchive->setEnabled(false);
+    m_actBatchMarkRead->setEnabled(false);
+}
+
 // ---------------------------------------------------------------------------
 // Reply / ReplyAll / Forward
 // ---------------------------------------------------------------------------
@@ -713,6 +801,167 @@ void MainWindow::onResumeDraft(const Draft& draft)
     auto* w = new ComposeWindow(*optAcc, this);
     w->loadDraft(draft);
     w->show();
+}
+
+void MainWindow::onDeleteMessage()
+{
+    if (!m_currentMessage.has_value()) return;
+    qint64 folderId = m_currentMessage->folderId;
+    qint64 messageId = m_currentMessage->id;
+    
+    m_currentMessage = std::nullopt;
+    disableMessageActions();
+    m_messageView->clear();
+
+    SyncManager::instance().deleteMessage(m_currentAccountId, folderId, messageId);
+}
+
+void MainWindow::onArchiveMessage()
+{
+    if (!m_currentMessage.has_value()) return;
+    qint64 folderId = m_currentMessage->folderId;
+    qint64 messageId = m_currentMessage->id;
+    
+    m_currentMessage = std::nullopt;
+    disableMessageActions();
+    m_messageView->clear();
+
+    SyncManager::instance().archiveMessage(m_currentAccountId, folderId, messageId);
+}
+
+void MainWindow::onMarkRead()
+{
+    if (!m_currentMessage.has_value()) return;
+    SyncManager::instance().markMessageRead(m_currentAccountId, m_currentMessage->folderId, m_currentMessage->id, true);
+}
+
+void MainWindow::onMarkUnread()
+{
+    if (!m_currentMessage.has_value()) return;
+    SyncManager::instance().markMessageRead(m_currentAccountId, m_currentMessage->folderId, m_currentMessage->id, false);
+}
+
+void MainWindow::onToggleStar()
+{
+    if (!m_currentMessage.has_value()) return;
+    bool currentlyStarred = (m_currentMessage->flags & MessageFlags::Flagged) != 0;
+    SyncManager::instance().starMessage(m_currentAccountId, m_currentMessage->folderId, m_currentMessage->id, !currentlyStarred);
+    
+    if (currentlyStarred) {
+        m_currentMessage->flags &= ~MessageFlags::Flagged;
+    } else {
+        m_currentMessage->flags |= MessageFlags::Flagged;
+    }
+}
+
+void MainWindow::onMoveMessage()
+{
+    if (!m_currentMessage.has_value()) return;
+    qint64 sourceFolderId = m_currentMessage->folderId;
+    qint64 messageId = m_currentMessage->id;
+    
+    FolderPickerDialog dlg(m_currentAccountId, sourceFolderId, this);
+    if (dlg.exec() == QDialog::Accepted) {
+        qint64 destFolderId = dlg.selectedFolderId();
+        if (destFolderId != -1) {
+            m_currentMessage = std::nullopt;
+            disableMessageActions();
+            m_messageView->clear();
+
+            SyncManager::instance().moveMessage(m_currentAccountId, sourceFolderId, destFolderId, messageId);
+        }
+    }
+}
+
+void MainWindow::onCopyMessage()
+{
+    if (!m_currentMessage.has_value()) return;
+    qint64 sourceFolderId = m_currentMessage->folderId;
+    
+    FolderPickerDialog dlg(m_currentAccountId, sourceFolderId, this);
+    if (dlg.exec() == QDialog::Accepted) {
+        qint64 destFolderId = dlg.selectedFolderId();
+        if (destFolderId != -1) {
+            SyncManager::instance().copyMessage(m_currentAccountId, sourceFolderId, destFolderId, m_currentMessage->id);
+        }
+    }
+}
+
+void MainWindow::onRefreshFolder()
+{
+    if (m_currentAccountId != -1 && m_messageList) {
+        qint64 folderId = m_messageList->currentFolderId();
+        if (folderId != -1) {
+            SyncManager::instance().refreshFolder(m_currentAccountId, folderId);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Batch operations (Phase 4C)
+// ---------------------------------------------------------------------------
+
+void MainWindow::onSelectionChanged(const QList<qint64>& ids)
+{
+    m_selectedMessageIds = ids;
+    const bool multiSelected = ids.size() > 1;
+    m_actBatchDelete->setEnabled(multiSelected);
+    m_actBatchArchive->setEnabled(multiSelected);
+    m_actBatchMarkRead->setEnabled(multiSelected);
+}
+
+void MainWindow::onBatchDelete()
+{
+    if (m_selectedMessageIds.isEmpty() || m_currentAccountId == -1) return;
+
+    MessageStore store;
+    // Collect folder IDs — all selected messages may be in different folders,
+    // but in practice they will all be in the same folder since the list shows one folder.
+    QSet<qint64> affectedFolders;
+    for (qint64 msgId : m_selectedMessageIds) {
+        auto optMsg = store.messageById(msgId);
+        if (optMsg.has_value()) {
+            affectedFolders.insert(optMsg->folderId);
+            SyncManager::instance().deleteMessage(m_currentAccountId, optMsg->folderId, msgId);
+        }
+    }
+
+    m_selectedMessageIds.clear();
+    m_currentMessage = std::nullopt;
+    m_messageView->clear();
+    disableMessageActions();
+}
+
+void MainWindow::onBatchArchive()
+{
+    if (m_selectedMessageIds.isEmpty() || m_currentAccountId == -1) return;
+
+    MessageStore store;
+    for (qint64 msgId : m_selectedMessageIds) {
+        auto optMsg = store.messageById(msgId);
+        if (optMsg.has_value()) {
+            SyncManager::instance().archiveMessage(m_currentAccountId, optMsg->folderId, msgId);
+        }
+    }
+
+    m_selectedMessageIds.clear();
+    m_currentMessage = std::nullopt;
+    m_messageView->clear();
+    disableMessageActions();
+}
+
+void MainWindow::onBatchMarkRead()
+{
+    if (m_selectedMessageIds.isEmpty() || m_currentAccountId == -1) return;
+
+    MessageStore store;
+    for (qint64 msgId : m_selectedMessageIds) {
+        auto optMsg = store.messageById(msgId);
+        if (optMsg.has_value()) {
+            SyncManager::instance().markMessageRead(m_currentAccountId, optMsg->folderId, msgId, true);
+        }
+    }
+    m_selectedMessageIds.clear();
 }
 
 // ---------------------------------------------------------------------------

@@ -150,6 +150,29 @@ std::optional<Folder> FolderStore::folderByName(qint64 accountId,
     return folderFromQuery(q);
 }
 
+std::optional<Folder> FolderStore::folderByRole(qint64 accountId,
+                                                 const QString& role)
+{
+    QSqlQuery q(Database::connection());
+    q.prepare(QStringLiteral(
+        "%1 WHERE account_id = :aid AND role = :role"
+    ).arg(QString::fromLatin1(kSelectColumns)));
+    q.bindValue(QStringLiteral(":aid"),  accountId);
+    q.bindValue(QStringLiteral(":role"), role);
+
+    if (!q.exec()) {
+        Logger::instance().error(QStringLiteral("storage"),
+            QStringLiteral("folderByRole failed: ") + q.lastError().text());
+        return std::nullopt;
+    }
+
+    if (!q.next()) {
+        return std::nullopt;
+    }
+
+    return folderFromQuery(q);
+}
+
 QList<Folder> FolderStore::foldersForAccount(qint64 accountId)
 {
     QSqlQuery q(Database::connection());

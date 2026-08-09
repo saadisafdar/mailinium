@@ -50,6 +50,8 @@ set(MAILINIUM_SOURCES
     ui/AttachmentBar.cpp
     ui/ComposeWindow.h
     ui/ComposeWindow.cpp
+    ui/FolderPickerDialog.h
+    ui/FolderPickerDialog.cpp
 
     # protocols/
     protocols/MimeMessage.h

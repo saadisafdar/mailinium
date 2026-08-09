@@ -86,13 +86,13 @@ private slots:
                  "idx_messages_thread missing");
     }
 
-    void migrationVersion_isSeven()
+    void migrationVersion_isEight()
     {
         QSqlQuery q(Database::connection());
         QVERIFY(q.exec(QStringLiteral(
             "SELECT MAX(version) FROM schema_migrations")));
         QVERIFY(q.next());
-        QCOMPARE(q.value(0).toInt(), 7);
+        QCOMPARE(q.value(0).toInt(), 8);
     }
 
     void foreignKeysEnabled()

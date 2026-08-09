@@ -34,6 +34,33 @@ public:
     void searchAllUids();
     void fetchMessageHeaders(const QList<qint64>& uids);
     void fetchMessageBody(qint64 uid);
+    
+    // Message operations
+    void storeFlags(const QList<qint64>& uids, const QString& flags, bool add);
+    void copyMessages(const QList<qint64>& uids, const QString& destFolder);
+    void moveMessages(const QList<qint64>& uids, const QString& destFolder);
+    void expunge();
+
+    enum class State {
+        Disconnected,
+        Connecting,
+        Greeting,
+        NotAuthenticated,
+        Authenticating,
+        Authenticated,
+        ListingFolders,
+        SelectingFolder,
+        SearchingUids,
+        FetchingHeaders,
+        FetchingBody,
+        StoringFlags,
+        CopyingMessages,
+        MovingMessages,
+        Expunging
+    };
+
+    State state() const { return m_state; }
+    bool isIdle() const { return m_state == State::Authenticated; }
 
 signals:
     void connected();
@@ -51,6 +78,11 @@ signals:
     void headersFetched(const QList<Message>& messages);
     void bodyFetched(qint64 uid, const QString& body);
 
+    void flagsStored(const QList<qint64>& uids);
+    void messagesCopied(const QList<qint64>& uids);
+    void messagesMoved(const QList<qint64>& uids);
+    void expunged();
+
 private slots:
     void onSocketConnected();
     void onSocketDisconnected();
@@ -59,20 +91,6 @@ private slots:
     void onReadyRead();
 
 private:
-    enum class State {
-        Disconnected,
-        Connecting,
-        Greeting,
-        NotAuthenticated,
-        Authenticating,
-        Authenticated,
-        ListingFolders,
-        SelectingFolder,
-        SearchingUids,
-        FetchingHeaders,
-        FetchingBody
-    };
-
     void processLine(const QByteArray& line);
     QString generateTag();
 
@@ -91,6 +109,10 @@ private:
     void handleSelectResponse(const QByteArray& line);
     void handleSearchResponse(const QByteArray& line);
     void handleFetchResponse(const QByteArray& line);
+    void handleStoreResponse(const QByteArray& line);
+    void handleCopyResponse(const QByteArray& line);
+    void handleMoveResponse(const QByteArray& line);
+    void handleExpungeResponse(const QByteArray& line);
     
     // Parser state
     QByteArray m_buffer;
@@ -103,4 +125,16 @@ private:
     QList<qint64> m_parsedUids;
     QList<Message> m_parsedMessages;
     qint64 m_currentFetchUid = 0;
+
+    // Capability & Fallback state
+    QStringList m_capabilities;
+    enum class MoveFallbackStep {
+        None,
+        Copy,
+        StoreDeleted,
+        Expunge
+    };
+    MoveFallbackStep m_moveFallbackStep = MoveFallbackStep::None;
+    QList<qint64> m_pendingMoveUids;
+    QString m_pendingMoveDest;
 };

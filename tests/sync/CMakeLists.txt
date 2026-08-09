@@ -17,3 +17,9 @@ mailinium_add_test(
     SOURCES SyncTest.cpp ${SYNC_SOURCES}
     LINKS Qt6::Sql Qt6::Network Qt6::Widgets
 )
+
+mailinium_add_test(
+    NAME MessageOpsTest
+    SOURCES MessageOpsTest.cpp ${SYNC_SOURCES}
+    LINKS Qt6::Sql Qt6::Network Qt6::Widgets
+)

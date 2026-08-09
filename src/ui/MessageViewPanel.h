@@ -28,6 +28,7 @@ public:
 
     void displayMessage(const Message& msg, const QString& rawBody);
     void displayMimeMessage(const Message& msg, const QString& htmlBody, const QString& plainBody, const QList<AttachmentInfo>& attachments);
+    void clear();
 
     // [OPTIMIZATION] Check cache before hitting SQLite
     bool loadFromCache(qint64 messageId, const Message& latestMsg);

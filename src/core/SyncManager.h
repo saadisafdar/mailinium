@@ -35,6 +35,14 @@ public:
     void syncFolder(qint64 accountId, qint64 folderId);
     void fetchMessageBody(qint64 accountId, qint64 folderId, qint64 messageId);
 
+    void deleteMessage(qint64 accountId, qint64 folderId, qint64 messageId);
+    void archiveMessage(qint64 accountId, qint64 folderId, qint64 messageId);
+    void markMessageRead(qint64 accountId, qint64 folderId, qint64 messageId, bool read);
+    void starMessage(qint64 accountId, qint64 folderId, qint64 messageId, bool starred);
+    void moveMessage(qint64 accountId, qint64 sourceFolderId, qint64 destFolderId, qint64 messageId);
+    void copyMessage(qint64 accountId, qint64 sourceFolderId, qint64 destFolderId, qint64 messageId);
+    void refreshFolder(qint64 accountId, qint64 folderId);
+
 signals:
     // Emitted when any worker updates its folders, so the UI can refresh.
     void foldersUpdated(qint64 accountId);

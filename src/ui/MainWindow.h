@@ -71,6 +71,21 @@ private slots:
     void onSettings();
     void onAbout();
 
+    void onDeleteMessage();
+    void onArchiveMessage();
+    void onMarkRead();
+    void onMarkUnread();
+    void onToggleStar();
+    void onMoveMessage();
+    void onCopyMessage();
+    void onRefreshFolder();
+
+    // Batch operations (Phase 4C)
+    void onBatchDelete();
+    void onBatchArchive();
+    void onBatchMarkRead();
+    void onSelectionChanged(const QList<qint64>& ids);
+
 private:
     // -- Setup phases (called in order from constructor) --------------------
     void setupActions();
@@ -83,6 +98,9 @@ private:
     // -- Window state persistence -------------------------------------------
     void saveWindowState();
     void restoreWindowState();
+
+    // -- Helpers ------------------------------------------------------------
+    void disableMessageActions();
 
     // -----------------------------------------------------------------------
     // Layout
@@ -107,6 +125,9 @@ private:
     // Currently selected message (for Reply/Forward context)
     std::optional<Message> m_currentMessage;
     qint64 m_currentAccountId = -1;
+
+    // Phase 4C: batch selection tracking
+    QList<qint64> m_selectedMessageIds;
 
     // -----------------------------------------------------------------------
     // File menu
@@ -148,6 +169,15 @@ private:
     QAction* m_actDelete      = nullptr;
     QAction* m_actMarkRead    = nullptr;
     QAction* m_actMarkUnread  = nullptr;
+    QAction* m_actToggleStar  = nullptr;
+    QAction* m_actMove        = nullptr;
+    QAction* m_actCopy        = nullptr;
+    QAction* m_actRefresh     = nullptr;
+
+    // Batch actions (Phase 4C)
+    QAction* m_actBatchDelete  = nullptr;
+    QAction* m_actBatchArchive = nullptr;
+    QAction* m_actBatchMarkRead = nullptr;
 
     // -----------------------------------------------------------------------
     // Help menu

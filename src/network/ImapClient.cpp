@@ -263,6 +263,12 @@ void ImapClient::onReadyRead()
 
 void ImapClient::processLine(const QByteArray& line)
 {
+    if (line.startsWith("* CAPABILITY ")) {
+        QString capLine = QString::fromUtf8(line).mid(13).trimmed();
+        m_capabilities = capLine.toUpper().split(' ', Qt::SkipEmptyParts);
+        Logger::instance().info(QStringLiteral("imap"), QStringLiteral("Server capabilities: ") + capLine);
+    }
+
     if (m_state == State::SearchingUids && line.startsWith("* SEARCH")) {
         Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 3. Raw SEARCH response: ") + QString::fromUtf8(line));
     } else {
@@ -281,6 +287,14 @@ void ImapClient::processLine(const QByteArray& line)
         handleSearchResponse(line);
     } else if (m_state == State::FetchingHeaders || m_state == State::FetchingBody) {
         handleFetchResponse(line);
+    } else if (m_state == State::StoringFlags) {
+        handleStoreResponse(line);
+    } else if (m_state == State::CopyingMessages) {
+        handleCopyResponse(line);
+    } else if (m_state == State::MovingMessages) {
+        handleMoveResponse(line);
+    } else if (m_state == State::Expunging) {
+        handleExpungeResponse(line);
     }
 }
 
@@ -337,7 +351,8 @@ void ImapClient::handleListResponse(const QByteArray& line)
                 else if (lowerName.contains("trash") || lowerName.contains("bin")) f.role = "trash";
                 else if (lowerName.contains("draft")) f.role = "drafts";
                 else if (lowerName.contains("spam") || lowerName.contains("junk")) f.role = "spam";
-                else f.role = "archive"; // Default role
+                else if (lowerName.contains("archive") || lowerName.contains("all mail")) f.role = "archive";
+                else f.role = QStringLiteral(""); // custom folder
                 
                 m_parsedFolders.append(f);
             }
@@ -627,6 +642,152 @@ void ImapClient::handleFetchResponse(const QByteArray& line)
     } else if (line.startsWith(m_currentTag + " NO") || line.startsWith(m_currentTag + " BAD")) {
         Logger::instance().error(QStringLiteral("imap"), QStringLiteral("FETCH failed: ") + QString::fromUtf8(line));
         m_state = State::Authenticated;
+        emit errorOccurred(QString::fromUtf8(line));
+    }
+}
+
+void ImapClient::storeFlags(const QList<qint64>& uids, const QString& flags, bool add)
+{
+    if (uids.isEmpty()) {
+        emit flagsStored(uids);
+        return;
+    }
+    m_state = State::StoringFlags;
+    m_parsedUids = uids;
+    m_currentTag = generateTag().toUtf8();
+    QStringList uidStrs;
+    for (qint64 u : uids) uidStrs << QString::number(u);
+    QString sequence = uidStrs.join(",");
+    QString sign = add ? QStringLiteral("+") : QStringLiteral("-");
+    QByteArray cmd = m_currentTag + " UID STORE " + sequence.toUtf8() + " " + sign.toUtf8() + "FLAGS (" + flags.toUtf8() + ")\r\n";
+    Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending STORE: ") + cmd.trimmed());
+    m_socket->write(cmd);
+}
+
+void ImapClient::copyMessages(const QList<qint64>& uids, const QString& destFolder)
+{
+    if (uids.isEmpty()) {
+        emit messagesCopied(uids);
+        return;
+    }
+    m_state = State::CopyingMessages;
+    m_parsedUids = uids;
+    m_currentTag = generateTag().toUtf8();
+    QStringList uidStrs;
+    for (qint64 u : uids) uidStrs << QString::number(u);
+    QString sequence = uidStrs.join(",");
+    QString safeDest = destFolder;
+    safeDest.replace("\"", "\\\"");
+    QByteArray cmd = m_currentTag + " UID COPY " + sequence.toUtf8() + " \"" + safeDest.toUtf8() + "\"\r\n";
+    Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending COPY: ") + cmd.trimmed());
+    m_socket->write(cmd);
+}
+
+void ImapClient::moveMessages(const QList<qint64>& uids, const QString& destFolder)
+{
+    if (uids.isEmpty()) {
+        emit messagesMoved(uids);
+        return;
+    }
+    
+    if (m_capabilities.contains(QStringLiteral("MOVE"))) {
+        m_state = State::MovingMessages;
+        m_parsedUids = uids;
+        m_moveFallbackStep = MoveFallbackStep::None;
+        m_currentTag = generateTag().toUtf8();
+        QStringList uidStrs;
+        for (qint64 u : uids) uidStrs << QString::number(u);
+        QString sequence = uidStrs.join(",");
+        QString safeDest = destFolder;
+        safeDest.replace("\"", "\\\"");
+        QByteArray cmd = m_currentTag + " UID MOVE " + sequence.toUtf8() + " \"" + safeDest.toUtf8() + "\"\r\n";
+        Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending MOVE: ") + cmd.trimmed());
+        m_socket->write(cmd);
+    } else {
+        Logger::instance().info(QStringLiteral("imap"), QStringLiteral("MOVE capability not supported. Using fallback COPY -> STORE +Deleted -> EXPUNGE"));
+        m_moveFallbackStep = MoveFallbackStep::Copy;
+        m_pendingMoveUids = uids;
+        m_pendingMoveDest = destFolder;
+        
+        copyMessages(uids, destFolder);
+    }
+}
+
+void ImapClient::expunge()
+{
+    m_state = State::Expunging;
+    m_currentTag = generateTag().toUtf8();
+    QByteArray cmd = m_currentTag + " EXPUNGE\r\n";
+    Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending EXPUNGE"));
+    m_socket->write(cmd);
+}
+
+void ImapClient::handleStoreResponse(const QByteArray& line)
+{
+    if (line.startsWith(m_currentTag + " OK")) {
+        Logger::instance().info(QStringLiteral("imap"), QStringLiteral("STORE succeeded."));
+        if (m_moveFallbackStep == MoveFallbackStep::StoreDeleted) {
+            m_moveFallbackStep = MoveFallbackStep::Expunge;
+            expunge();
+        } else {
+            m_state = State::Authenticated;
+            emit flagsStored(m_parsedUids);
+        }
+    } else if (line.startsWith(m_currentTag + " NO") || line.startsWith(m_currentTag + " BAD")) {
+        Logger::instance().error(QStringLiteral("imap"), QStringLiteral("STORE failed: ") + QString::fromUtf8(line));
+        m_state = State::Authenticated;
+        m_moveFallbackStep = MoveFallbackStep::None;
+        emit errorOccurred(QString::fromUtf8(line));
+    }
+}
+
+void ImapClient::handleCopyResponse(const QByteArray& line)
+{
+    if (line.startsWith(m_currentTag + " OK")) {
+        Logger::instance().info(QStringLiteral("imap"), QStringLiteral("COPY succeeded."));
+        if (m_moveFallbackStep == MoveFallbackStep::Copy) {
+            m_moveFallbackStep = MoveFallbackStep::StoreDeleted;
+            storeFlags(m_pendingMoveUids, QStringLiteral("\\Deleted"), true);
+        } else {
+            m_state = State::Authenticated;
+            emit messagesCopied(m_parsedUids);
+        }
+    } else if (line.startsWith(m_currentTag + " NO") || line.startsWith(m_currentTag + " BAD")) {
+        Logger::instance().error(QStringLiteral("imap"), QStringLiteral("COPY failed: ") + QString::fromUtf8(line));
+        m_state = State::Authenticated;
+        m_moveFallbackStep = MoveFallbackStep::None;
+        emit errorOccurred(QString::fromUtf8(line));
+    }
+}
+
+void ImapClient::handleMoveResponse(const QByteArray& line)
+{
+    if (line.startsWith(m_currentTag + " OK")) {
+        Logger::instance().info(QStringLiteral("imap"), QStringLiteral("MOVE succeeded."));
+        m_state = State::Authenticated;
+        emit messagesMoved(m_parsedUids);
+    } else if (line.startsWith(m_currentTag + " NO") || line.startsWith(m_currentTag + " BAD")) {
+        Logger::instance().error(QStringLiteral("imap"), QStringLiteral("MOVE failed: ") + QString::fromUtf8(line));
+        m_state = State::Authenticated;
+        emit errorOccurred(QString::fromUtf8(line));
+    }
+}
+
+void ImapClient::handleExpungeResponse(const QByteArray& line)
+{
+    if (line.startsWith(m_currentTag + " OK")) {
+        Logger::instance().info(QStringLiteral("imap"), QStringLiteral("EXPUNGE succeeded."));
+        m_state = State::Authenticated;
+        if (m_moveFallbackStep == MoveFallbackStep::Expunge) {
+            m_moveFallbackStep = MoveFallbackStep::None;
+            emit messagesMoved(m_pendingMoveUids);
+        } else {
+            emit expunged();
+        }
+    } else if (line.startsWith(m_currentTag + " NO") || line.startsWith(m_currentTag + " BAD")) {
+        Logger::instance().error(QStringLiteral("imap"), QStringLiteral("EXPUNGE failed: ") + QString::fromUtf8(line));
+        m_state = State::Authenticated;
+        m_moveFallbackStep = MoveFallbackStep::None;
         emit errorOccurred(QString::fromUtf8(line));
     }
 }

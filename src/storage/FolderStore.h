@@ -40,6 +40,10 @@ public:
     // Returns nullopt if not found.
     std::optional<Folder> folderByName(qint64 accountId, const QString& name);
 
+    // Look up a single folder by its role within an account.
+    // Returns nullopt if not found.
+    std::optional<Folder> folderByRole(qint64 accountId, const QString& role);
+
     // Returns all folders belonging to an account, ordered by name.
     QList<Folder> foldersForAccount(qint64 accountId);
 };

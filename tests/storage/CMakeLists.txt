@@ -43,3 +43,9 @@ mailinium_add_test(
     SOURCES DraftStoreTest.cpp ${STORAGE_SOURCES}
     LINKS Qt6::Sql Qt6::Widgets
 )
+
+mailinium_add_test(
+    NAME SearchTest
+    SOURCES SearchTest.cpp ${STORAGE_SOURCES}
+    LINKS Qt6::Sql Qt6::Widgets
+)

@@ -232,10 +232,22 @@ QList<Message> MessageStore::messagesForFolder(qint64 folderId,
                                                 int limit,
                                                 int offset)
 {
-    QString sql = QStringLiteral(
-        "%1 WHERE folder_id = :fid"
-        "   ORDER BY date_utc DESC")
-        .arg(QString::fromLatin1(kSelectColumns));
+    bool isTrash = false;
+    QSqlQuery fq(Database::connection());
+    fq.prepare(QStringLiteral("SELECT role FROM folders WHERE id = :fid"));
+    fq.bindValue(QStringLiteral(":fid"), folderId);
+    if (fq.exec() && fq.next()) {
+        isTrash = (fq.value(0).toString() == QStringLiteral("trash"));
+    }
+
+    QString sql = QStringLiteral("%1 WHERE folder_id = :fid AND uid >= 0")
+                  .arg(QString::fromLatin1(kSelectColumns));
+                  
+    if (!isTrash) {
+        sql += QStringLiteral(" AND (flags & :deletedFlag) = 0");
+    }
+    
+    sql += QStringLiteral(" ORDER BY date_utc DESC");
 
     if (limit > 0) {
         sql += QStringLiteral(" LIMIT %1 OFFSET %2")
@@ -245,6 +257,9 @@ QList<Message> MessageStore::messagesForFolder(qint64 folderId,
     QSqlQuery q(Database::connection());
     q.prepare(sql);
     q.bindValue(QStringLiteral(":fid"), folderId);
+    if (!isTrash) {
+        q.bindValue(QStringLiteral(":deletedFlag"), MessageFlags::Deleted);
+    }
 
     if (!q.exec()) {
         Logger::instance().error(QStringLiteral("storage"),
@@ -262,10 +277,25 @@ QList<Message> MessageStore::messagesForFolder(qint64 folderId,
 
 int MessageStore::messageCount(qint64 folderId)
 {
+    bool isTrash = false;
+    QSqlQuery fq(Database::connection());
+    fq.prepare(QStringLiteral("SELECT role FROM folders WHERE id = :fid"));
+    fq.bindValue(QStringLiteral(":fid"), folderId);
+    if (fq.exec() && fq.next()) {
+        isTrash = (fq.value(0).toString() == QStringLiteral("trash"));
+    }
+
+    QString sql = QStringLiteral("SELECT COUNT(*) FROM messages WHERE folder_id = :fid");
+    if (!isTrash) {
+        sql += QStringLiteral(" AND (flags & :deletedFlag) = 0");
+    }
+
     QSqlQuery q(Database::connection());
-    q.prepare(QStringLiteral(
-        "SELECT COUNT(*) FROM messages WHERE folder_id = :fid"));
+    q.prepare(sql);
     q.bindValue(QStringLiteral(":fid"), folderId);
+    if (!isTrash) {
+        q.bindValue(QStringLiteral(":deletedFlag"), MessageFlags::Deleted);
+    }
 
     if (!q.exec() || !q.next()) {
         Logger::instance().error(QStringLiteral("storage"),
@@ -278,12 +308,26 @@ int MessageStore::messageCount(qint64 folderId)
 
 int MessageStore::unreadCount(qint64 folderId)
 {
+    bool isTrash = false;
+    QSqlQuery fq(Database::connection());
+    fq.prepare(QStringLiteral("SELECT role FROM folders WHERE id = :fid"));
+    fq.bindValue(QStringLiteral(":fid"), folderId);
+    if (fq.exec() && fq.next()) {
+        isTrash = (fq.value(0).toString() == QStringLiteral("trash"));
+    }
+
+    QString sql = QStringLiteral("SELECT COUNT(*) FROM messages WHERE folder_id = :fid AND (flags & :seenFlag) = 0");
+    if (!isTrash) {
+        sql += QStringLiteral(" AND (flags & :deletedFlag) = 0");
+    }
+
     QSqlQuery q(Database::connection());
-    q.prepare(QStringLiteral(
-        "SELECT COUNT(*) FROM messages"
-        "    WHERE folder_id = :fid AND (flags & :seenFlag) = 0"));
+    q.prepare(sql);
     q.bindValue(QStringLiteral(":fid"),      folderId);
     q.bindValue(QStringLiteral(":seenFlag"), MessageFlags::Seen);
+    if (!isTrash) {
+        q.bindValue(QStringLiteral(":deletedFlag"), MessageFlags::Deleted);
+    }
 
     if (!q.exec() || !q.next()) {
         Logger::instance().error(QStringLiteral("storage"),
@@ -417,3 +461,64 @@ QByteArray MessageStore::getAttachmentData(qint64 attachmentId)
 
     return q.value(0).toByteArray();
 }
+
+QList<Message> MessageStore::searchMessages(const QString& query, qint64 accountId, qint64 folderId)
+{
+    if (query.trimmed().isEmpty()) {
+        return {};
+    }
+
+    // Sanitize query for FTS5: escape internal double-quotes, then wrap in double-quotes.
+    // The trailing * (prefix match) must be OUTSIDE the quoted phrase per FTS5 grammar.
+    // E.g. user types "Hell" → FTS5 receives "Hell"* → matches "Hello", "Hellfire", etc.
+    // Special characters like '(', ')', ':', 'AND', 'OR', 'NOT' inside quotes are literals.
+    QString sanitized = query.trimmed();
+    sanitized.replace(QLatin1String("\""), QLatin1String("\"\""));
+    sanitized = QLatin1String("\"") + sanitized + QLatin1String("\"*");
+
+    QString sql = QStringLiteral(
+        "SELECT m.id, m.folder_id, m.uid, m.message_id, m.thread_id, "
+        "       m.subject, m.from_address, m.from_name, m.date_utc, "
+        "       m.flags, m.size, m.body_fetched, m.to_list, m.cc_list, m.bcc_list, m.reply_to "
+        "FROM messages m "
+        "JOIN messages_fts ON m.id = messages_fts.rowid "
+    );
+
+    const bool needsFolderJoin = (accountId != -1);
+    if (needsFolderJoin) {
+        sql += QStringLiteral("JOIN folders f ON m.folder_id = f.id ");
+    }
+
+    sql += QStringLiteral("WHERE messages_fts MATCH ? ");
+
+    if (folderId != -1) {
+        sql += QStringLiteral("AND m.folder_id = ? ");
+    } else if (accountId != -1) {
+        sql += QStringLiteral("AND f.account_id = ? ");
+    }
+
+    sql += QStringLiteral("ORDER BY rank");
+
+    QSqlQuery q(Database::connection());
+    q.prepare(sql);
+    q.addBindValue(sanitized);
+
+    if (folderId != -1) {
+        q.addBindValue(folderId);
+    } else if (accountId != -1) {
+        q.addBindValue(accountId);
+    }
+
+    if (!q.exec()) {
+        Logger::instance().error(QStringLiteral("storage"),
+            QStringLiteral("searchMessages failed for query '") + query + "': " + q.lastError().text());
+        return {};
+    }
+
+    QList<Message> result;
+    while (q.next()) {
+        result.append(messageFromQuery(q));
+    }
+    return result;
+}
+

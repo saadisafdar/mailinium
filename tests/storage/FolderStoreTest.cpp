@@ -197,6 +197,47 @@ private slots:
     {
         QVERIFY(!m_store.deleteFolder(999999));
     }
+
+    void testFolderRoleDetection()
+    {
+        // Folders assigned by ImapClient::handleListResponse based on name.
+        // We test the expected role assignments at the store level.
+        qint64 accId = insertTestAccount(QStringLiteral("role-test@example.com"));
+
+        auto insertNamed = [&](const QString& name, const QString& role) -> Folder {
+            Folder f;
+            f.accountId = accId;
+            f.name = name;
+            f.role = role;
+            f.id = m_store.insertFolder(f);
+            return f;
+        };
+
+        Folder allMail = insertNamed(QStringLiteral("[Gmail]/All Mail"), QStringLiteral("archive"));
+        Folder inbox   = insertNamed(QStringLiteral("INBOX"),            QStringLiteral("inbox"));
+        Folder custom1 = insertNamed(QStringLiteral("Work"),             QStringLiteral(""));
+        Folder custom2 = insertNamed(QStringLiteral("Personal"),         QStringLiteral(""));
+
+        QVERIFY(allMail.id > 0);
+        QVERIFY(inbox.id > 0);
+        QVERIFY(custom1.id > 0);
+        QVERIFY(custom2.id > 0);
+
+        // Archive role lookup should find [Gmail]/All Mail, not Work or Personal
+        auto optArchive = m_store.folderByRole(accId, QStringLiteral("archive"));
+        QVERIFY(optArchive.has_value());
+        QCOMPARE(optArchive->id, allMail.id);
+        QCOMPARE(optArchive->name, QStringLiteral("[Gmail]/All Mail"));
+
+        // Custom folders must have empty role — not "archive"
+        auto optWork = m_store.folderByName(accId, QStringLiteral("Work"));
+        QVERIFY(optWork.has_value());
+        QCOMPARE(optWork->role, QStringLiteral(""));
+
+        auto optPersonal = m_store.folderByName(accId, QStringLiteral("Personal"));
+        QVERIFY(optPersonal.has_value());
+        QCOMPARE(optPersonal->role, QStringLiteral(""));
+    }
 };
 
 QTEST_MAIN(FolderStoreTest)

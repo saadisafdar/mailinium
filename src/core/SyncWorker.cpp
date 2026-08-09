@@ -6,6 +6,9 @@
 #include "protocols/MimeParser.h"
 #include "auth/GoogleOAuth.h"
 #include "core/Logger.h"
+#include "storage/Database.h"
+#include <QSqlQuery>
+#include <QSqlError>
 
 SyncWorker::SyncWorker(const Account& account, QObject* parent)
     : QObject(parent), m_account(account)
@@ -24,6 +27,11 @@ SyncWorker::SyncWorker(const Account& account, QObject* parent)
     connect(m_imapClient, &ImapClient::uidsFound, this, &SyncWorker::onUidsFound);
     connect(m_imapClient, &ImapClient::headersFetched, this, &SyncWorker::onHeadersFetched);
     connect(m_imapClient, &ImapClient::bodyFetched, this, &SyncWorker::onBodyFetched);
+
+    connect(m_imapClient, &ImapClient::flagsStored, this, &SyncWorker::onFlagsStored);
+    connect(m_imapClient, &ImapClient::messagesCopied, this, &SyncWorker::onMessagesCopied);
+    connect(m_imapClient, &ImapClient::messagesMoved, this, &SyncWorker::onMessagesMoved);
+    connect(m_imapClient, &ImapClient::expunged, this, &SyncWorker::onExpunged);
 
     connect(&m_syncTimer, &QTimer::timeout, this, &SyncWorker::doSync);
     connect(&Settings::instance(), &Settings::settingChanged, this, &SyncWorker::onSettingChanged);
@@ -57,31 +65,19 @@ void SyncWorker::doSync()
 
 void SyncWorker::syncFolder(qint64 folderId)
 {
-    m_currentSyncFolderId = folderId;
-    
-    FolderStore store;
-    auto optFolder = store.folderById(folderId);
-    if (optFolder.has_value()) {
-        emit statusChanged(QStringLiteral("Syncing ") + optFolder->name + "...");
-        m_imapClient->selectFolder(optFolder->name);
-    }
+    ImapTask task;
+    task.type = ImapTask::Type::SyncFolder;
+    task.folderId = folderId;
+    queueTask(task);
 }
 
 void SyncWorker::fetchMessageBody(qint64 folderId, qint64 messageId)
 {
     Q_UNUSED(folderId)
-    
-    MessageStore store;
-    auto optMsg = store.messageById(messageId);
-    if (optMsg.has_value()) {
-        if (optMsg->bodyFetched) {
-            // Already fetched, UI will load it from DB (in Phase 3E) or we can emit it
-            // For now just fetch it again to fulfill the requirement of loading it dynamically
-        }
-        
-        m_currentFetchMessageId = messageId;
-        m_imapClient->fetchMessageBody(optMsg->uid);
-    }
+    ImapTask task;
+    task.type = ImapTask::Type::FetchBody;
+    task.messageId = messageId;
+    queueTask(task);
 }
 
 void SyncWorker::onClientConnected()
@@ -124,6 +120,7 @@ void SyncWorker::onClientError(const QString& errorMsg)
 {
     Logger::instance().error(QStringLiteral("sync"), QStringLiteral("IMAP error: ") + errorMsg);
     emit statusChanged(QStringLiteral("Error: ") + errorMsg);
+    handleTaskFailure(errorMsg);
 }
 
 void SyncWorker::onLoginSuccessful()
@@ -242,6 +239,11 @@ void SyncWorker::onUidsFound(const QList<qint64>& uids)
         Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("No new messages to download."));
         emit statusChanged(QStringLiteral("Synced"));
         emit messagesUpdated(m_currentSyncFolderId);
+        
+        if (!m_taskQueue.isEmpty() && m_taskQueue.head().type == ImapTask::Type::SyncFolder) {
+            m_taskQueue.dequeue();
+        }
+        processNextTask();
     } else {
         Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("Downloading ") + QString::number(missingUids.size()) + " missing headers...");
         emit statusChanged(QStringLiteral("Downloading ") + QString::number(missingUids.size()) + " headers...");
@@ -255,11 +257,15 @@ void SyncWorker::onHeadersFetched(const QList<Message>& messages)
     
     Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("Saving ") + QString::number(messages.size()) + " headers to database...");
     MessageStore store;
+    // Wrap inserts in a transaction for performance on older hardware
+    QSqlQuery txn(::Database::connection());
+    txn.exec(QStringLiteral("BEGIN"));
     for (const Message& msg : messages) {
         Message toInsert = msg;
         toInsert.folderId = m_currentSyncFolderId;
         store.insertMessage(toInsert);
     }
+    txn.exec(QStringLiteral("COMMIT"));
     
     Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 7. Number inserted into SQLite: ") + QString::number(messages.size()));
     if (messages.isEmpty()) {
@@ -268,6 +274,11 @@ void SyncWorker::onHeadersFetched(const QList<Message>& messages)
     
     emit statusChanged(QStringLiteral("Synced"));
     emit messagesUpdated(m_currentSyncFolderId);
+
+    if (!m_taskQueue.isEmpty() && m_taskQueue.head().type == ImapTask::Type::SyncFolder) {
+        m_taskQueue.dequeue();
+    }
+    processNextTask();
 }
 
 void SyncWorker::onBodyFetched(qint64 uid, const QString& body)
@@ -293,4 +304,353 @@ void SyncWorker::onBodyFetched(qint64 uid, const QString& body)
     }
 
     emit messageBodyReady(msgId, body);
+
+    if (!m_taskQueue.isEmpty() && m_taskQueue.head().type == ImapTask::Type::FetchBody) {
+        m_taskQueue.dequeue();
+    }
+    processNextTask();
+}
+
+static bool relocateMessage(qint64 messageId, qint64 folderId, qint64 uid)
+{
+    QSqlQuery q(::Database::connection());
+    q.prepare(QStringLiteral("UPDATE messages SET folder_id = :fid, uid = :uid WHERE id = :id"));
+    q.bindValue(QStringLiteral(":fid"), folderId);
+    q.bindValue(QStringLiteral(":uid"), uid);
+    q.bindValue(QStringLiteral(":id"),  messageId);
+    return q.exec();
+}
+
+void SyncWorker::queueTask(const ImapTask& task)
+{
+    m_taskQueue.enqueue(task);
+    processNextTask();
+}
+
+void SyncWorker::processNextTask()
+{
+    if (m_taskQueue.isEmpty()) {
+        return;
+    }
+
+    if (!m_imapClient->isIdle()) {
+        return; // Wait for current operation to finish
+    }
+
+    // Check for folder context drift
+    const ImapTask firstTask = m_taskQueue.head();
+    if (firstTask.type != ImapTask::Type::SyncFolder && firstTask.folderId != -1 && firstTask.folderId != m_currentSyncFolderId) {
+        ImapTask selectTask;
+        selectTask.type = ImapTask::Type::SyncFolder;
+        selectTask.folderId = firstTask.folderId;
+        m_taskQueue.prepend(selectTask);
+    }
+
+    const ImapTask& task = m_taskQueue.head();
+    
+    switch (task.type) {
+        case ImapTask::Type::SyncFolder: {
+            m_currentSyncFolderId = task.folderId;
+            FolderStore store;
+            auto optFolder = store.folderById(task.folderId);
+            if (optFolder.has_value()) {
+                emit statusChanged(QStringLiteral("Syncing ") + optFolder->name + "...");
+                m_imapClient->selectFolder(optFolder->name);
+            } else {
+                handleTaskFailure(QStringLiteral("Folder not found"));
+            }
+            break;
+        }
+        case ImapTask::Type::FetchBody: {
+            MessageStore store;
+            auto optMsg = store.messageById(task.messageId);
+            if (optMsg.has_value()) {
+                m_currentFetchMessageId = task.messageId;
+                m_imapClient->fetchMessageBody(optMsg->uid);
+            } else {
+                handleTaskFailure(QStringLiteral("Message not found"));
+            }
+            break;
+        }
+        case ImapTask::Type::Delete: {
+            FolderStore fs;
+            auto optTrash = fs.folderByRole(m_account.id, QStringLiteral("trash"));
+            auto optSrc = fs.folderById(task.folderId);
+            if (optSrc.has_value()) {
+                if (optSrc->role == QStringLiteral("trash")) {
+                    m_imapClient->storeFlags(task.uids, QStringLiteral("\\Deleted"), true);
+                } else if (optTrash.has_value()) {
+                    m_imapClient->moveMessages(task.uids, optTrash->name);
+                } else {
+                    m_imapClient->storeFlags(task.uids, QStringLiteral("\\Deleted"), true);
+                }
+            } else {
+                handleTaskFailure(QStringLiteral("Source folder not found"));
+            }
+            break;
+        }
+        case ImapTask::Type::Archive: {
+            // Archive now routes through moveMessage(); this case should never fire.
+            // Log an error rather than silently deleting the message.
+            Logger::instance().error(QStringLiteral("sync"), QStringLiteral("processNextTask: unexpected Archive task — archive should route through Move"));
+            handleTaskFailure(QStringLiteral("Unexpected Archive task"));
+            break;
+        }
+        case ImapTask::Type::MarkFlags: {
+            m_imapClient->storeFlags(task.uids, task.flags, task.addFlags);
+            break;
+        }
+        case ImapTask::Type::Move: {
+            FolderStore fs;
+            auto optDest = fs.folderById(task.destFolderId);
+            if (optDest.has_value()) {
+                m_imapClient->moveMessages(task.uids, optDest->name);
+            } else {
+                handleTaskFailure(QStringLiteral("Destination folder not found"));
+            }
+            break;
+        }
+        case ImapTask::Type::Copy: {
+            FolderStore fs;
+            auto optDest = fs.folderById(task.destFolderId);
+            if (optDest.has_value()) {
+                m_imapClient->copyMessages(task.uids, optDest->name);
+            } else {
+                handleTaskFailure(QStringLiteral("Destination folder not found"));
+            }
+            break;
+        }
+    }
+}
+
+void SyncWorker::handleTaskFailure(const QString& errorMsg)
+{
+    if (m_taskQueue.isEmpty()) return;
+    
+    ImapTask task = m_taskQueue.dequeue();
+    Logger::instance().error(QStringLiteral("sync"), QStringLiteral("Task failed: ") + errorMsg);
+    
+    MessageStore store;
+    if (task.type == ImapTask::Type::Delete) {
+        if (m_origFlags.contains(task.messageId)) {
+            int origFlags = m_origFlags.take(task.messageId);
+            store.updateFlags(task.messageId, origFlags);
+            emit messagesUpdated(task.folderId);
+        }
+    } else if (task.type == ImapTask::Type::MarkFlags) {
+        if (m_origFlags.contains(task.messageId)) {
+            int origFlags = m_origFlags.take(task.messageId);
+            store.updateFlags(task.messageId, origFlags);
+            emit messagesUpdated(task.folderId);
+        }
+    } else if (task.type == ImapTask::Type::Move) {
+        if (m_origFolderIds.contains(task.messageId)) {
+            qint64 origFid = m_origFolderIds.take(task.messageId);
+            qint64 origUid = m_origUids.take(task.messageId);
+            relocateMessage(task.messageId, origFid, origUid);
+            emit messagesUpdated(origFid);
+            emit messagesUpdated(task.destFolderId);
+        }
+    } else if (task.type == ImapTask::Type::Copy) {
+        QSqlQuery del(::Database::connection());
+        del.prepare(QStringLiteral("DELETE FROM messages WHERE folder_id = :fid AND uid = :uid"));
+        del.bindValue(QStringLiteral(":fid"), task.destFolderId);
+        del.bindValue(QStringLiteral(":uid"), -1 * task.messageId);
+        del.exec();
+        emit messagesUpdated(task.destFolderId);
+    }
+    
+    emit statusChanged(QStringLiteral("Error: ") + errorMsg);
+    processNextTask();
+}
+
+void SyncWorker::deleteMessage(qint64 folderId, qint64 messageId)
+{
+    MessageStore store;
+    auto optMsg = store.messageById(messageId);
+    if (!optMsg.has_value()) return;
+
+    m_origFlags[messageId] = optMsg->flags;
+    store.updateFlags(messageId, optMsg->flags | MessageFlags::Deleted);
+    emit messagesUpdated(folderId);
+
+    ImapTask task;
+    task.type = ImapTask::Type::Delete;
+    task.folderId = folderId;
+    task.messageId = messageId;
+    task.uids = { optMsg->uid };
+    queueTask(task);
+}
+
+void SyncWorker::archiveMessage(qint64 folderId, qint64 messageId)
+{
+    FolderStore fs;
+    auto optArchive = fs.folderByRole(m_account.id, QStringLiteral("archive"));
+    if (optArchive.has_value()) {
+        moveMessage(folderId, optArchive->id, messageId);
+    } else {
+        Logger::instance().error(QStringLiteral("sync"), QStringLiteral("Archive folder not found for account ") + QString::number(m_account.id));
+    }
+}
+
+void SyncWorker::markMessageRead(qint64 folderId, qint64 messageId, bool read)
+{
+    MessageStore store;
+    auto optMsg = store.messageById(messageId);
+    if (!optMsg.has_value()) return;
+
+    int currentFlags = optMsg->flags;
+    int newFlags = read ? (currentFlags | MessageFlags::Seen) : (currentFlags & ~MessageFlags::Seen);
+    
+    m_origFlags[messageId] = currentFlags;
+    store.updateFlags(messageId, newFlags);
+    emit messagesUpdated(folderId);
+
+    ImapTask task;
+    task.type = ImapTask::Type::MarkFlags;
+    task.folderId = folderId;
+    task.messageId = messageId;
+    task.uids = { optMsg->uid };
+    task.flags = QStringLiteral("\\Seen");
+    task.addFlags = read;
+    queueTask(task);
+}
+
+void SyncWorker::starMessage(qint64 folderId, qint64 messageId, bool starred)
+{
+    MessageStore store;
+    auto optMsg = store.messageById(messageId);
+    if (!optMsg.has_value()) return;
+
+    int currentFlags = optMsg->flags;
+    int newFlags = starred ? (currentFlags | MessageFlags::Flagged) : (currentFlags & ~MessageFlags::Flagged);
+    
+    m_origFlags[messageId] = currentFlags;
+    store.updateFlags(messageId, newFlags);
+    emit messagesUpdated(folderId);
+
+    ImapTask task;
+    task.type = ImapTask::Type::MarkFlags;
+    task.folderId = folderId;
+    task.messageId = messageId;
+    task.uids = { optMsg->uid };
+    task.flags = QStringLiteral("\\Flagged");
+    task.addFlags = starred;
+    queueTask(task);
+}
+
+void SyncWorker::moveMessage(qint64 sourceFolderId, qint64 destFolderId, qint64 messageId)
+{
+    MessageStore store;
+    auto optMsg = store.messageById(messageId);
+    if (!optMsg.has_value()) return;
+
+    m_origFolderIds[messageId] = sourceFolderId;
+    m_origUids[messageId] = optMsg->uid;
+    qint64 tempUid = -1 * messageId;
+    relocateMessage(messageId, destFolderId, tempUid);
+    emit messagesUpdated(sourceFolderId);
+    emit messagesUpdated(destFolderId);
+
+    ImapTask task;
+    task.type = ImapTask::Type::Move;
+    task.folderId = sourceFolderId;
+    task.destFolderId = destFolderId;
+    task.messageId = messageId;
+    task.uids = { optMsg->uid };
+    queueTask(task);
+}
+
+void SyncWorker::copyMessage(qint64 sourceFolderId, qint64 destFolderId, qint64 messageId)
+{
+    MessageStore store;
+    auto optMsg = store.messageById(messageId);
+    if (!optMsg.has_value()) return;
+
+    Message copyMsg = *optMsg;
+    copyMsg.folderId = destFolderId;
+    copyMsg.uid = -1 * messageId;
+    store.insertMessage(copyMsg);
+    emit messagesUpdated(destFolderId);
+
+    ImapTask task;
+    task.type = ImapTask::Type::Copy;
+    task.folderId = sourceFolderId;
+    task.destFolderId = destFolderId;
+    task.messageId = messageId;
+    task.uids = { optMsg->uid };
+    queueTask(task);
+}
+
+void SyncWorker::refreshFolder(qint64 folderId)
+{
+    syncFolder(folderId);
+}
+
+void SyncWorker::onFlagsStored(const QList<qint64>& uids)
+{
+    Q_UNUSED(uids)
+    if (m_taskQueue.isEmpty()) return;
+    ImapTask task = m_taskQueue.dequeue();
+    
+    m_origFlags.remove(task.messageId);
+
+    if (task.type == ImapTask::Type::Delete) {
+        MessageStore store;
+        store.deleteMessage(task.messageId);
+        emit messagesUpdated(task.folderId);
+    }
+    
+    emit statusChanged(QStringLiteral("Synced"));
+    processNextTask();
+}
+
+void SyncWorker::onMessagesCopied(const QList<qint64>& uids)
+{
+    Q_UNUSED(uids)
+    if (m_taskQueue.isEmpty()) return;
+    ImapTask task = m_taskQueue.dequeue();
+    
+    QSqlQuery del(::Database::connection());
+    del.prepare(QStringLiteral("DELETE FROM messages WHERE folder_id = :fid AND uid = :uid"));
+    del.bindValue(QStringLiteral(":fid"), task.destFolderId);
+    del.bindValue(QStringLiteral(":uid"), -1 * task.messageId);
+    del.exec();
+    
+    emit statusChanged(QStringLiteral("Synced"));
+    syncFolder(task.destFolderId);
+    processNextTask();
+}
+
+void SyncWorker::onMessagesMoved(const QList<qint64>& uids)
+{
+    Q_UNUSED(uids)
+    if (m_taskQueue.isEmpty()) return;
+    ImapTask task = m_taskQueue.dequeue();
+    
+    if (task.type == ImapTask::Type::Delete) {
+        MessageStore store;
+        store.deleteMessage(task.messageId);
+        m_origFlags.remove(task.messageId);
+        emit messagesUpdated(task.folderId);
+    } else if (task.type == ImapTask::Type::Move) {
+        m_origFolderIds.remove(task.messageId);
+        m_origUids.remove(task.messageId);
+        
+        MessageStore store;
+        store.deleteMessage(task.messageId);
+    }
+    
+    emit statusChanged(QStringLiteral("Synced"));
+    syncFolder(task.destFolderId);
+    processNextTask();
+}
+
+void SyncWorker::onExpunged()
+{
+    if (m_taskQueue.isEmpty()) return;
+    ImapTask task = m_taskQueue.dequeue();
+    
+    emit statusChanged(QStringLiteral("Synced"));
+    processNextTask();
 }

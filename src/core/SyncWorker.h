@@ -8,6 +8,27 @@
 #include "storage/Message.h"
 #include "core/Settings.h"
 
+#include <QQueue>
+
+struct ImapTask {
+    enum class Type {
+        SyncFolder,
+        FetchBody,
+        Delete,
+        Archive,
+        MarkFlags,
+        Move,
+        Copy
+    };
+    Type type;
+    qint64 folderId = -1;
+    qint64 messageId = -1;
+    qint64 destFolderId = -1;
+    QList<qint64> uids;
+    QString flags;
+    bool addFlags = false;
+};
+
 class ImapClient;
 class GoogleOAuth;
 
@@ -30,6 +51,15 @@ public:
     void syncFolder(qint64 folderId);
     void fetchMessageBody(qint64 folderId, qint64 messageId);
 
+    // Interactive message operations
+    void deleteMessage(qint64 folderId, qint64 messageId);
+    void archiveMessage(qint64 folderId, qint64 messageId);
+    void markMessageRead(qint64 folderId, qint64 messageId, bool read);
+    void starMessage(qint64 folderId, qint64 messageId, bool starred);
+    void moveMessage(qint64 sourceFolderId, qint64 destFolderId, qint64 messageId);
+    void copyMessage(qint64 sourceFolderId, qint64 destFolderId, qint64 messageId);
+    void refreshFolder(qint64 folderId);
+
 signals:
     void statusChanged(const QString& status);
     void foldersUpdated();
@@ -49,6 +79,11 @@ private slots:
     void onUidsFound(const QList<qint64>& uids);
     void onHeadersFetched(const QList<Message>& messages);
     void onBodyFetched(qint64 uid, const QString& body);
+
+    void onFlagsStored(const QList<qint64>& uids);
+    void onMessagesCopied(const QList<qint64>& uids);
+    void onMessagesMoved(const QList<qint64>& uids);
+    void onExpunged();
     
     void onTokenRefreshSuccessful(const QString& email, const QString& accessToken, const QString& refreshToken, int expiresInSecs);
     void onTokenRefreshFailed(const QString& errorMsg);
@@ -58,6 +93,10 @@ private slots:
     void doSync();
 
 private:
+    void queueTask(const ImapTask& task);
+    void processNextTask();
+    void handleTaskFailure(const QString& errorMsg);
+
     Account m_account;
     ImapClient* m_imapClient = nullptr;
     GoogleOAuth* m_oauth = nullptr;
@@ -65,4 +104,9 @@ private:
     
     qint64 m_currentSyncFolderId = -1;
     qint64 m_currentFetchMessageId = -1;
+
+    QQueue<ImapTask> m_taskQueue;
+    QMap<qint64, qint64> m_origFolderIds;
+    QMap<qint64, qint64> m_origUids;
+    QMap<qint64, int> m_origFlags;
 };

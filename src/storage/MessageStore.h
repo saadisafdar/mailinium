@@ -53,6 +53,10 @@ public:
     int messageCount(qint64 folderId);
     int unreadCount(qint64 folderId);
 
+    // Search messages using SQLite FTS5 index.
+    // Filters by accountId or folderId if they are not -1.
+    QList<Message> searchMessages(const QString& query, qint64 accountId = -1, qint64 folderId = -1);
+
     // --- Message Body & Attachments (Phase 4A) ------------------------------
     bool saveMessageBodies(qint64 messageId, const QString& htmlBody, const QString& plainBody);
     std::pair<QString, QString> getMessageBodies(qint64 messageId);

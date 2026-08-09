@@ -429,6 +429,41 @@ bool Database::runMigrations()
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Migration 8 — Add FTS5 triggers and initial population
+    // -----------------------------------------------------------------------
+    if (current < 8) {
+        const QStringList statements = {
+            QStringLiteral(
+                "INSERT INTO messages_fts(rowid, subject, from_address, from_name) "
+                "SELECT id, subject, from_address, from_name FROM messages"
+            ),
+            QStringLiteral(
+                "CREATE TRIGGER IF NOT EXISTS trg_messages_insert AFTER INSERT ON messages "
+                "BEGIN "
+                "    INSERT INTO messages_fts(rowid, subject, from_address, from_name) "
+                "    VALUES(new.id, new.subject, new.from_address, new.from_name); "
+                "END;"
+            ),
+            QStringLiteral(
+                "CREATE TRIGGER IF NOT EXISTS trg_messages_delete AFTER DELETE ON messages "
+                "BEGIN "
+                "    DELETE FROM messages_fts WHERE rowid = old.id; "
+                "END;"
+            ),
+            QStringLiteral(
+                "CREATE TRIGGER IF NOT EXISTS trg_messages_update AFTER UPDATE OF subject, from_address, from_name ON messages "
+                "BEGIN "
+                "    UPDATE messages_fts SET subject = new.subject, from_address = new.from_address, from_name = new.from_name WHERE rowid = new.id; "
+                "END;"
+            )
+        };
+
+        if (!runMigration(8, QStringLiteral("Add FTS5 triggers and initial population"), statements)) {
+            return false;
+        }
+    }
+
     // Future migrations: add new `if (current < N)` blocks here.
     // Never modify a migration that has already been applied.
 
