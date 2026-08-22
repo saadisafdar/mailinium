@@ -167,11 +167,30 @@ void SyncWorker::onLoginSuccessful()
     m_syncTimer.start(intervalSecs * 1000);
 }
 
+void SyncWorker::reauthenticate()
+{
+    Logger::instance().info(QStringLiteral("sync"), QStringLiteral("Reauthenticating account: ") + m_account.email);
+    m_authFailed = false;
+
+    // Reload account from database in case tokens/passwords were updated
+    AccountStore store;
+    auto opt = store.accountById(m_account.id);
+    if (opt.has_value()) {
+        m_account = *opt;
+    }
+
+    if (m_imapClient->isConnected()) {
+        m_imapClient->disconnectFromServer();
+    }
+    start();
+}
+
 void SyncWorker::onLoginFailed(const QString& reason)
 {
     Logger::instance().error(QStringLiteral("sync"), QStringLiteral("Login failed: ") + reason);
-    emit statusChanged(QStringLiteral("Login failed"));
+    emit statusChanged(QStringLiteral("Needs Attention"));
     m_authFailed = true;
+    m_syncTimer.stop();
     m_imapClient->disconnectFromServer();
 }
 
@@ -186,17 +205,22 @@ void SyncWorker::onTokenRefreshSuccessful(const QString& /*email*/, const QStrin
 
     // Update database
     AccountStore store;
-    store.updateAccount(m_account);
+    store.updateOAuthTokens(m_account.id, accessToken, refreshToken, m_account.tokenExpiry);
 
     emit statusChanged(QStringLiteral("Authenticating (OAuth)..."));
     m_imapClient->loginOAuth2(m_account.email, m_account.accessToken);
 }
 
-void SyncWorker::onTokenRefreshFailed(const QString& errorMsg)
+void SyncWorker::onTokenRefreshFailed(const QString& errorMsg, bool isPermanent)
 {
-    Logger::instance().error(QStringLiteral("sync"), QStringLiteral("Token refresh failed: ") + errorMsg);
-    emit statusChanged(QStringLiteral("Token refresh failed"));
-    m_authFailed = true;
+    Logger::instance().error(QStringLiteral("sync"), QStringLiteral("Token refresh failed (permanent=%1): %2").arg(isPermanent).arg(errorMsg));
+    if (isPermanent) {
+        emit statusChanged(QStringLiteral("Needs Attention"));
+        m_authFailed = true;
+        m_syncTimer.stop();
+    } else {
+        emit statusChanged(QStringLiteral("Offline"));
+    }
     m_imapClient->disconnectFromServer();
 }
 

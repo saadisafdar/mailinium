@@ -1,6 +1,10 @@
 #include "SettingsDialog.h"
+#include "AccountSetupWizard.h"
 #include "../core/Settings.h"
 #include "../core/ThemeManager.h"
+#include "../core/SyncManager.h"
+#include "../storage/AccountStore.h"
+#include "../auth/GoogleOAuth.h"
 
 #include <QApplication>
 #include <QButtonGroup>
@@ -8,7 +12,12 @@
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
+#include <QListWidget>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QRadioButton>
 #include <QSpinBox>
 #include <QTabWidget>
@@ -175,20 +184,99 @@ QWidget* SettingsDialog::buildAccountsTab()
     auto* page  = new QWidget;
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(16, 16, 16, 16);
+    layout->setSpacing(12);
 
-    auto* note = new QLabel(
-        tr("Account management will be available in the next phase.\n\n"
-           "To add an account, use File \u2192 Add Account."),
-        page);
-    note->setAlignment(Qt::AlignCenter);
-    note->setWordWrap(true);
-    {
-        QPalette p = note->palette();
-        p.setColor(QPalette::WindowText,
-                   QApplication::palette().color(QPalette::Disabled, QPalette::WindowText));
-        note->setPalette(p);
-    }
-    layout->addWidget(note, 1, Qt::AlignCenter);
+    auto* listWidget = new QListWidget(page);
+    layout->addWidget(listWidget, 1);
+
+    auto reloadAccounts = [listWidget]() {
+        listWidget->clear();
+        AccountStore store;
+        const auto accounts = store.allAccounts();
+        for (const Account& acc : accounts) {
+            QString typeStr = (acc.authType == AuthType::OAuth2) ? QStringLiteral("OAuth 2.0") : QStringLiteral("Password");
+            QString label = QStringLiteral("%1 (%2) — %3").arg(acc.email, acc.displayName.isEmpty() ? tr("No Name") : acc.displayName, typeStr);
+            auto* item = new QListWidgetItem(label, listWidget);
+            item->setData(Qt::UserRole, acc.id);
+        }
+    };
+
+    reloadAccounts();
+
+    auto* btnLayout = new QHBoxLayout;
+    auto* btnAdd = new QPushButton(tr("Add Account..."), page);
+    auto* btnReauth = new QPushButton(tr("Re-authenticate..."), page);
+    auto* btnRemove = new QPushButton(tr("Remove"), page);
+
+    btnLayout->addWidget(btnAdd);
+    btnLayout->addWidget(btnReauth);
+    btnLayout->addWidget(btnRemove);
+    btnLayout->addStretch();
+    layout->addLayout(btnLayout);
+
+    connect(btnAdd, &QPushButton::clicked, this, [this, reloadAccounts]() {
+        AccountSetupWizard wizard(this);
+        if (wizard.exec() == QDialog::Accepted) {
+            qint64 newId = wizard.createdAccountId();
+            if (newId > 0) {
+                AccountStore store;
+                auto opt = store.accountById(newId);
+                if (opt.has_value()) {
+                    SyncManager::instance().addAccount(*opt);
+                }
+            }
+            reloadAccounts();
+        }
+    });
+
+    connect(btnReauth, &QPushButton::clicked, this, [this, listWidget, reloadAccounts]() {
+        auto items = listWidget->selectedItems();
+        if (items.isEmpty()) return;
+
+        qint64 accountId = items.first()->data(Qt::UserRole).toLongLong();
+        AccountStore store;
+        auto opt = store.accountById(accountId);
+        if (!opt.has_value()) return;
+
+        Account acc = *opt;
+        if (acc.authType == AuthType::OAuth2) {
+            auto* oauth = new GoogleOAuth(this);
+            connect(oauth, &GoogleOAuth::authSuccessful, this, [this, oauth, accountId, reloadAccounts](const QString& email, const QString& accessToken, const QString& refreshToken, int expiresInSecs) {
+                oauth->deleteLater();
+                AccountStore s;
+                s.updateOAuthTokens(accountId, accessToken, refreshToken, QDateTime::currentDateTimeUtc().addSecs(expiresInSecs));
+                SyncManager::instance().reauthenticateAccount(accountId);
+                reloadAccounts();
+                QMessageBox::information(this, tr("Authentication Succeeded"), tr("Successfully re-authenticated %1.").arg(email));
+            });
+            connect(oauth, &GoogleOAuth::authFailed, this, [this, oauth](const QString& errorMsg, bool /*isPermanent*/) {
+                oauth->deleteLater();
+                QMessageBox::warning(this, tr("Authentication Failed"), errorMsg);
+            });
+            oauth->startReauthFlow(acc.email);
+        } else {
+            bool ok = false;
+            QString newPass = QInputDialog::getText(this, tr("Re-authenticate Account"),
+                tr("Enter password for %1:").arg(acc.email), QLineEdit::Password, QString(), &ok);
+            if (ok && !newPass.isEmpty()) {
+                AccountStore s;
+                s.updatePassword(accountId, newPass);
+                SyncManager::instance().reauthenticateAccount(accountId);
+                reloadAccounts();
+            }
+        }
+    });
+
+    connect(btnRemove, &QPushButton::clicked, this, [this, listWidget, reloadAccounts]() {
+        auto items = listWidget->selectedItems();
+        if (items.isEmpty()) return;
+
+        qint64 accountId = items.first()->data(Qt::UserRole).toLongLong();
+        if (QMessageBox::question(this, tr("Remove Account"), tr("Are you sure you want to remove this account? This will delete all downloaded messages.")) == QMessageBox::Yes) {
+            SyncManager::instance().removeAccount(accountId);
+            reloadAccounts();
+        }
+    });
 
     return page;
 }

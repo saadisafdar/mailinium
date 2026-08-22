@@ -26,6 +26,12 @@ public:
     // Returns true on success, false on failure (e.g., account not found).
     bool updateAccount(const Account& account);
 
+    // Updates only the OAuth tokens and expiration for an account.
+    bool updateOAuthTokens(qint64 accountId, const QString& accessToken, const QString& refreshToken, const QDateTime& expiry);
+
+    // Updates password for a password-authenticated account.
+    bool updatePassword(qint64 accountId, const QString& password);
+
     // Deletes an account and all associated folders and messages (due to ON DELETE CASCADE).
     // Returns true if a row was deleted, false otherwise.
     bool deleteAccount(qint64 accountId);

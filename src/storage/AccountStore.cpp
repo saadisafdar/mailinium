@@ -87,6 +87,45 @@ bool AccountStore::updateAccount(const Account& account)
     return q.numRowsAffected() > 0;
 }
 
+bool AccountStore::updateOAuthTokens(qint64 accountId, const QString& accessToken, const QString& refreshToken, const QDateTime& expiry)
+{
+    QSqlQuery q(Database::connection());
+    q.prepare(QStringLiteral(
+        "UPDATE accounts SET "
+        "    access_token = :access_token, "
+        "    refresh_token = :refresh_token, "
+        "    token_expiry = :token_expiry "
+        "WHERE id = :id"
+    ));
+
+    q.bindValue(QStringLiteral(":access_token"), accessToken);
+    q.bindValue(QStringLiteral(":refresh_token"), refreshToken);
+    q.bindValue(QStringLiteral(":token_expiry"), expiry.isValid() ? expiry.toString(Qt::ISODate) : QStringLiteral(""));
+    q.bindValue(QStringLiteral(":id"), accountId);
+
+    if (!q.exec()) {
+        qWarning() << "ERROR [storage] updateOAuthTokens failed:" << q.lastError().text();
+        return false;
+    }
+
+    return q.numRowsAffected() > 0;
+}
+
+bool AccountStore::updatePassword(qint64 accountId, const QString& password)
+{
+    QSqlQuery q(Database::connection());
+    q.prepare(QStringLiteral("UPDATE accounts SET password = :password WHERE id = :id"));
+    q.bindValue(QStringLiteral(":password"), password);
+    q.bindValue(QStringLiteral(":id"), accountId);
+
+    if (!q.exec()) {
+        qWarning() << "ERROR [storage] updatePassword failed:" << q.lastError().text();
+        return false;
+    }
+
+    return q.numRowsAffected() > 0;
+}
+
 bool AccountStore::deleteAccount(qint64 accountId)
 {
     QSqlQuery q(Database::connection());

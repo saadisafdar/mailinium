@@ -35,6 +35,7 @@ signals:
 public slots:
     void onThemeChanged(bool dark);
     void onFoldersUpdated(qint64 accountId);
+    void onSyncStatusChanged(qint64 accountId, const QString& status);
 
 private slots:
     void onAccountSelected();

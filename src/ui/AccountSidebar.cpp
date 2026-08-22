@@ -5,8 +5,11 @@
 #include "../storage/FolderStore.h"
 #include "../core/Logger.h"
 
+#include "../auth/GoogleOAuth.h"
+
 #include <QApplication>
 #include <QFrame>
+#include <QInputDialog>
 #include <QLabel>
 #include <QListWidget>
 #include <QTreeWidget>
@@ -29,6 +32,12 @@ AccountSidebar::AccountSidebar(QWidget* parent)
             
     connect(&SyncManager::instance(), &SyncManager::foldersUpdated,
             this, &AccountSidebar::onFoldersUpdated);
+
+    connect(&SyncManager::instance(), &SyncManager::syncStatusChanged,
+            this, &AccountSidebar::onSyncStatusChanged);
+
+    connect(&SyncManager::instance(), &SyncManager::accountRemoved,
+            this, &AccountSidebar::loadAccounts);
 }
 
 AccountSidebar::~AccountSidebar() = default;
@@ -198,6 +207,30 @@ void AccountSidebar::onFolderSelectionChanged()
     emit folderSelected(accountId, folderId);
 }
 
+void AccountSidebar::onSyncStatusChanged(qint64 accountId, const QString& status)
+{
+    for (int i = 0; i < m_accountList->count(); ++i) {
+        QListWidgetItem* item = m_accountList->item(i);
+        if (item && item->data(Qt::UserRole).toLongLong() == accountId) {
+            AccountStore store;
+            auto opt = store.accountById(accountId);
+            QString email = opt.has_value() ? opt->email : item->text();
+
+            if (status == QStringLiteral("Needs Attention") || status == QStringLiteral("Login failed")) {
+                item->setText(email + QStringLiteral(" [!]"));
+                item->setToolTip(tr("Authentication failed: ") + status);
+            } else if (status == QStringLiteral("Offline")) {
+                item->setText(email + QStringLiteral(" (offline)"));
+                item->setToolTip(tr("Network offline — showing cached mail"));
+            } else {
+                item->setText(email);
+                item->setToolTip(status);
+            }
+            break;
+        }
+    }
+}
+
 void AccountSidebar::onAccountContextMenu(const QPoint& pos)
 {
     QListWidgetItem* item = m_accountList->itemAt(pos);
@@ -206,14 +239,49 @@ void AccountSidebar::onAccountContextMenu(const QPoint& pos)
     qint64 accountId = item->data(Qt::UserRole).toLongLong();
     
     QMenu menu(this);
+    QAction* syncAction = menu.addAction(tr("Sync Account"));
+    QAction* reauthAction = menu.addAction(tr("Re-authenticate..."));
+    menu.addSeparator();
     QAction* removeAction = menu.addAction(tr("Remove Account"));
     
     QAction* selectedAction = menu.exec(m_accountList->mapToGlobal(pos));
-    if (selectedAction == removeAction) {
+    if (selectedAction == syncAction) {
+        SyncManager::instance().refreshFolder(accountId, -1);
+    } else if (selectedAction == reauthAction) {
+        AccountStore store;
+        auto optAcc = store.accountById(accountId);
+        if (!optAcc.has_value()) return;
+
+        Account acc = *optAcc;
+        if (acc.authType == AuthType::OAuth2) {
+            auto* oauth = new GoogleOAuth(this);
+            connect(oauth, &GoogleOAuth::authSuccessful, this, [this, oauth, accountId](const QString& email, const QString& accessToken, const QString& refreshToken, int expiresInSecs) {
+                oauth->deleteLater();
+                AccountStore s;
+                s.updateOAuthTokens(accountId, accessToken, refreshToken, QDateTime::currentDateTimeUtc().addSecs(expiresInSecs));
+                SyncManager::instance().reauthenticateAccount(accountId);
+                loadAccounts();
+                QMessageBox::information(this, tr("Authentication Succeeded"), tr("Successfully re-authenticated %1.").arg(email));
+            });
+            connect(oauth, &GoogleOAuth::authFailed, this, [this, oauth](const QString& errorMsg, bool /*isPermanent*/) {
+                oauth->deleteLater();
+                QMessageBox::warning(this, tr("Authentication Failed"), errorMsg);
+            });
+            oauth->startReauthFlow(acc.email);
+        } else {
+            bool ok = false;
+            QString newPass = QInputDialog::getText(this, tr("Re-authenticate Account"),
+                tr("Enter password for %1:").arg(acc.email), QLineEdit::Password, QString(), &ok);
+            if (ok && !newPass.isEmpty()) {
+                AccountStore s;
+                s.updatePassword(accountId, newPass);
+                SyncManager::instance().reauthenticateAccount(accountId);
+                loadAccounts();
+            }
+        }
+    } else if (selectedAction == removeAction) {
         if (QMessageBox::question(this, tr("Remove Account"), tr("Are you sure you want to remove this account? This will delete all downloaded messages.")) == QMessageBox::Yes) {
-            SyncManager::instance().stopWorker(accountId);
-            AccountStore store;
-            store.deleteAccount(accountId);
+            SyncManager::instance().removeAccount(accountId);
             loadAccounts();
         }
     }

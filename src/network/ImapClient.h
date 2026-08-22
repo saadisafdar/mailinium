@@ -64,6 +64,7 @@ public:
     };
 
     State state() const { return m_state; }
+    bool isConnected() const { return m_state != State::Disconnected; }
     bool isIdle() const { return m_state == State::Authenticated; }
 
 signals:

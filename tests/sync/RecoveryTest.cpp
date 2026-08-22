@@ -483,7 +483,7 @@ private slots:
         worker.start();
 
         // Wait for login to fail
-        QVERIFY(waitForStatus(statusSpy, QStringLiteral("Login failed")));
+        QVERIFY(waitForStatus(statusSpy, QStringLiteral("Needs Attention")) || waitForStatus(statusSpy, QStringLiteral("Login failed")));
 
         // Configure server to allow login
         server.setLoginSuccess(true);

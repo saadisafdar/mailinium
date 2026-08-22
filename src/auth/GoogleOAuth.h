@@ -21,15 +21,23 @@ public:
     // Starts the OAuth 2.0 flow by opening the system browser and listening on a local port.
     void startFlow();
 
+    // Starts re-authentication flow with an optional login hint (email).
+    void startReauthFlow(const QString& loginHint = QStringLiteral(""));
+
     // Refreshes the access token using the provided refresh token.
     void refreshAccessToken(const QString& refreshToken);
+
+    // Configuration checks
+    bool isConfigured() const { return !m_clientId.isEmpty(); }
+    QString clientId() const { return m_clientId; }
+    QString clientSecret() const { return m_clientSecret; }
 
 signals:
     // Emitted when the flow succeeds (either initial login or refresh)
     void authSuccessful(const QString& email, const QString& accessToken, const QString& refreshToken, int expiresInSecs);
     
-    // Emitted when an error occurs during the flow
-    void authFailed(const QString& errorMsg);
+    // Emitted when an error occurs during the flow. isPermanent indicates if refresh token was revoked/rejected (e.g. invalid_grant).
+    void authFailed(const QString& errorMsg, bool isPermanent = false);
 
 private slots:
     void onNewConnection();

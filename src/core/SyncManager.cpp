@@ -45,6 +45,31 @@ void SyncManager::stopWorker(qint64 accountId)
     }
 }
 
+void SyncManager::removeAccount(qint64 accountId)
+{
+    stopWorker(accountId);
+
+    AccountStore store;
+    store.deleteAccount(accountId);
+
+    Logger::instance().info(QStringLiteral("sync_manager"), QStringLiteral("Removed account ") + QString::number(accountId) + " and emitted accountRemoved");
+    emit accountRemoved(accountId);
+}
+
+void SyncManager::reauthenticateAccount(qint64 accountId)
+{
+    auto* worker = workerForAccount(accountId);
+    if (worker) {
+        worker->reauthenticate();
+    } else {
+        AccountStore store;
+        auto opt = store.accountById(accountId);
+        if (opt.has_value()) {
+            addAccount(*opt);
+        }
+    }
+}
+
 void SyncManager::addAccount(const Account& account)
 {
     if (m_workers.contains(account.id)) {

@@ -80,6 +80,50 @@ void GoogleOAuth::startFlow()
     }
 }
 
+void GoogleOAuth::startReauthFlow(const QString& loginHint)
+{
+    if (m_clientId.isEmpty()) {
+        emit authFailed(QStringLiteral("OAuth Client ID is missing. Please configure config/oauth.json."), true);
+        return;
+    }
+
+    if (!m_server->listen(QHostAddress::LocalHost, 0)) {
+        emit authFailed(QStringLiteral("Failed to start local web server for OAuth redirect."), false);
+        return;
+    }
+
+    m_port = m_server->serverPort();
+    Logger::instance().info(QStringLiteral("oauth"), QStringLiteral("Listening on local port for re-auth: ") + QString::number(m_port));
+
+    m_state = QString::number(QRandomGenerator::global()->generate64(), 16);
+    m_codeVerifier = generateCodeVerifier();
+    QString codeChallenge = generateCodeChallenge(m_codeVerifier);
+
+    QUrl url(GOOGLE_AUTH_URI);
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("client_id"), m_clientId);
+    query.addQueryItem(QStringLiteral("redirect_uri"), QStringLiteral("http://127.0.0.1:") + QString::number(m_port));
+    query.addQueryItem(QStringLiteral("response_type"), QStringLiteral("code"));
+    query.addQueryItem(QStringLiteral("scope"), QStringLiteral("https://mail.google.com/ https://www.googleapis.com/auth/userinfo.email"));
+    query.addQueryItem(QStringLiteral("access_type"), QStringLiteral("offline"));
+    query.addQueryItem(QStringLiteral("state"), m_state);
+    query.addQueryItem(QStringLiteral("code_challenge"), codeChallenge);
+    query.addQueryItem(QStringLiteral("code_challenge_method"), QStringLiteral("S256"));
+    query.addQueryItem(QStringLiteral("prompt"), QStringLiteral("consent"));
+    if (!loginHint.isEmpty()) {
+        query.addQueryItem(QStringLiteral("login_hint"), loginHint);
+    }
+
+    url.setQuery(query);
+
+    Logger::instance().info(QStringLiteral("oauth"), QStringLiteral("Opening browser for re-authentication: ") + loginHint);
+    
+    if (!QDesktopServices::openUrl(url)) {
+        m_server->close();
+        emit authFailed(QStringLiteral("Failed to open the system browser."), false);
+    }
+}
+
 void GoogleOAuth::onNewConnection()
 {
     QTcpSocket* socket = m_server->nextPendingConnection();
@@ -257,12 +301,37 @@ void GoogleOAuth::refreshAccessToken(const QString& refreshToken)
     connect(reply, &QNetworkReply::finished, this, [this, reply, refreshToken]() {
         reply->deleteLater();
         
+        QByteArray response = reply->readAll();
         if (reply->error() != QNetworkReply::NoError) {
-            emit authFailed(QStringLiteral("Failed to refresh token: ") + reply->errorString() + QStringLiteral(" - ") + reply->readAll());
+            bool isPermanent = false;
+            QString errorDetails = reply->errorString();
+
+            // Inspect response for OAuth error tokens (e.g. invalid_grant on token revocation/expiration)
+            QJsonDocument json = QJsonDocument::fromJson(response);
+            if (json.isObject()) {
+                QString err = json.object().value(QStringLiteral("error")).toString();
+                QString desc = json.object().value(QStringLiteral("error_description")).toString();
+                if (!err.isEmpty()) {
+                    errorDetails = err + (desc.isEmpty() ? QStringLiteral("") : (QStringLiteral(": ") + desc));
+                }
+                if (err == QStringLiteral("invalid_grant") ||
+                    err == QStringLiteral("invalid_client") ||
+                    err == QStringLiteral("unauthorized_client")) {
+                    isPermanent = true;
+                }
+            } else {
+                int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                if (httpStatus == 400 || httpStatus == 401) {
+                    isPermanent = true;
+                }
+            }
+
+            Logger::instance().error(QStringLiteral("oauth"),
+                QStringLiteral("Failed to refresh token (permanent=%1): %2").arg(isPermanent).arg(errorDetails));
+            emit authFailed(QStringLiteral("Failed to refresh token: ") + errorDetails, isPermanent);
             return;
         }
 
-        QByteArray response = reply->readAll();
         QJsonDocument json = QJsonDocument::fromJson(response);
         QJsonObject obj = json.object();
         
@@ -276,7 +345,7 @@ void GoogleOAuth::refreshAccessToken(const QString& refreshToken)
         }
 
         if (accessToken.isEmpty()) {
-            emit authFailed(QStringLiteral("Failed to parse new access token."));
+            emit authFailed(QStringLiteral("Failed to parse new access token."), false);
             return;
         }
 

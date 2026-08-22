@@ -59,6 +59,7 @@ public:
     void moveMessage(qint64 sourceFolderId, qint64 destFolderId, qint64 messageId);
     void copyMessage(qint64 sourceFolderId, qint64 destFolderId, qint64 messageId);
     void refreshFolder(qint64 folderId);
+    void reauthenticate();
 
 signals:
     void statusChanged(const QString& status);
@@ -87,7 +88,7 @@ private slots:
     void onExpunged();
 
     void onTokenRefreshSuccessful(const QString& email, const QString& accessToken, const QString& refreshToken, int expiresInSecs);
-    void onTokenRefreshFailed(const QString& errorMsg);
+    void onTokenRefreshFailed(const QString& errorMsg, bool isPermanent = false);
 
     void onSettingChanged(Settings::Key key, const QVariant& value);
 

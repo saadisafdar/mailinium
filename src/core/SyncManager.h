@@ -26,6 +26,12 @@ public:
     // Stops and removes the worker for a specific account.
     void stopWorker(qint64 accountId);
 
+    // Completely removes an account: stops worker, deletes from DB, and emits accountRemoved.
+    void removeAccount(qint64 accountId);
+
+    // Reauthenticates an account worker.
+    void reauthenticateAccount(qint64 accountId);
+
     // Adds and starts a worker for a newly created account.
     void addAccount(const Account& account);
     
@@ -49,6 +55,9 @@ signals:
     
     // Emitted when a worker's status changes (e.g. Connecting, Error).
     void syncStatusChanged(qint64 accountId, const QString& status);
+
+    // Emitted when an account is removed.
+    void accountRemoved(qint64 accountId);
 
     void messagesUpdated(qint64 accountId, qint64 folderId);
     void messageBodyReady(qint64 accountId, qint64 messageId, const QString& body);
