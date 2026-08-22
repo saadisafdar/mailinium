@@ -72,7 +72,7 @@ qint64 MessageStore::insertMessage(const Message& msg)
     q.bindValue(QStringLiteral(":dateUtc"),
         msg.date.isValid()
             ? msg.date.toTimeZone(QTimeZone::UTC).toString(Qt::ISODate)
-            : QString{});
+            : QStringLiteral(""));
     q.bindValue(QStringLiteral(":flags"),       msg.flags);
     q.bindValue(QStringLiteral(":size"),        msg.size);
     q.bindValue(QStringLiteral(":bodyFetched"), msg.bodyFetched ? 1 : 0);
@@ -87,13 +87,8 @@ qint64 MessageStore::insertMessage(const Message& msg)
         return -1;
     }
 
-    // lastInsertId() returns 0 for OR IGNORE no-ops in SQLite.
-    const QVariant lastId = q.lastInsertId();
-    if (!lastId.isNull() && lastId.toLongLong() > 0) {
-        return lastId.toLongLong();
-    }
-
-    // Row already existed — retrieve its id
+    // Retrieve the actual ID of the inserted or existing row using unique index key.
+    // We cannot use lastInsertId() because FTS5 triggers pollute it with shadow table writes.
     QSqlQuery sel(Database::connection());
     sel.prepare(QStringLiteral(
         "SELECT id FROM messages WHERE folder_id = :fid AND uid = :uid"));
@@ -102,8 +97,8 @@ qint64 MessageStore::insertMessage(const Message& msg)
 
     if (!sel.exec() || !sel.next()) {
         Logger::instance().error(QStringLiteral("storage"),
-            QStringLiteral("insertMessage: cannot retrieve id for existing uid ") +
-            QString::number(msg.uid));
+            QStringLiteral("insertMessage: cannot retrieve id for uid ") +
+            QString::number(msg.uid) + " folder_id: " + QString::number(msg.folderId));
         return -1;
     }
 

@@ -9,6 +9,7 @@
 #include "storage/Database.h"
 #include <QSqlQuery>
 #include <QSqlError>
+#include <QSet>
 
 SyncWorker::SyncWorker(const Account& account, QObject* parent)
     : QObject(parent), m_account(account)
@@ -26,6 +27,7 @@ SyncWorker::SyncWorker(const Account& account, QObject* parent)
     connect(m_imapClient, &ImapClient::folderSelected, this, &SyncWorker::onFolderSelected);
     connect(m_imapClient, &ImapClient::uidsFound, this, &SyncWorker::onUidsFound);
     connect(m_imapClient, &ImapClient::headersFetched, this, &SyncWorker::onHeadersFetched);
+    connect(m_imapClient, &ImapClient::flagsFetched, this, &SyncWorker::onFlagsFetched);
     connect(m_imapClient, &ImapClient::bodyFetched, this, &SyncWorker::onBodyFetched);
 
     connect(m_imapClient, &ImapClient::flagsStored, this, &SyncWorker::onFlagsStored);
@@ -44,6 +46,7 @@ SyncWorker::~SyncWorker()
 
 void SyncWorker::start()
 {
+    m_authFailed = false;
     Logger::instance().info(QStringLiteral("sync"), QStringLiteral("Starting SyncWorker for ") + m_account.email);
     emit statusChanged(QStringLiteral("Connecting..."));
     m_imapClient->connectToServer(m_account.imapHost, m_account.imapPort);
@@ -59,12 +62,34 @@ void SyncWorker::stop()
 
 void SyncWorker::doSync()
 {
-    // List folders initially
-    m_imapClient->listFolders();
+    if (m_authFailed) {
+        Logger::instance().warning(QStringLiteral("sync"), QStringLiteral("SyncWorker skipping auto-sync due to previous authentication failure."));
+        return;
+    }
+    if (m_imapClient->state() == ImapClient::State::Disconnected) {
+        Logger::instance().info(QStringLiteral("sync"), QStringLiteral("SyncWorker disconnected. Attempting to reconnect..."));
+        start();
+    } else if (m_imapClient->isIdle()) {
+        m_imapClient->listFolders();
+    }
 }
 
 void SyncWorker::syncFolder(qint64 folderId)
 {
+    // Prevent duplicate sync jobs for the same folder
+    for (const auto& t : m_taskQueue) {
+        if (t.type == ImapTask::Type::SyncFolder && t.folderId == folderId) {
+            Logger::instance().debug(QStringLiteral("sync"),
+                QStringLiteral("SyncFolder task for folder %1 already queued. Ignoring duplicate.").arg(folderId));
+            return;
+        }
+    }
+    if (m_currentSyncFolderId == folderId && !m_imapClient->isIdle()) {
+        Logger::instance().debug(QStringLiteral("sync"),
+            QStringLiteral("SyncFolder for folder %1 is currently active. Ignoring duplicate.").arg(folderId));
+        return;
+    }
+
     ImapTask task;
     task.type = ImapTask::Type::SyncFolder;
     task.folderId = folderId;
@@ -98,7 +123,7 @@ void SyncWorker::onClientConnected()
         }
     } else {
         // Enforce OAuth for Google accounts; do not allow App Passwords
-        if (m_account.provider.toLower() == QStringLiteral("google") || 
+        if (m_account.provider.toLower() == QStringLiteral("google") ||
             m_account.imapHost.toLower().contains(QStringLiteral("gmail.com"))) {
             Logger::instance().error(QStringLiteral("sync"), QStringLiteral("Password authentication is not supported for Google accounts. Please use OAuth 2.0."));
             emit statusChanged(QStringLiteral("OAuth 2.0 Required"));
@@ -126,10 +151,16 @@ void SyncWorker::onClientError(const QString& errorMsg)
 void SyncWorker::onLoginSuccessful()
 {
     emit statusChanged(QStringLiteral("Authenticated"));
-    
-    // Perform initial sync
-    doSync();
-    
+    m_authFailed = false;
+
+    // Resume task queue processing if there are tasks
+    if (!m_taskQueue.isEmpty()) {
+        processNextTask();
+    } else {
+        // Perform initial sync
+        doSync();
+    }
+
     // Set up periodic sync using configured interval
     int intervalSecs = Settings::instance().intValue(Settings::Key::SyncIntervalSeconds);
     if (intervalSecs < 10) intervalSecs = 10; // safety minimum
@@ -140,22 +171,23 @@ void SyncWorker::onLoginFailed(const QString& reason)
 {
     Logger::instance().error(QStringLiteral("sync"), QStringLiteral("Login failed: ") + reason);
     emit statusChanged(QStringLiteral("Login failed"));
+    m_authFailed = true;
     m_imapClient->disconnectFromServer();
 }
 
 void SyncWorker::onTokenRefreshSuccessful(const QString& /*email*/, const QString& accessToken, const QString& refreshToken, int expiresInSecs)
 {
     Logger::instance().info(QStringLiteral("sync"), QStringLiteral("Token refreshed for ") + m_account.email);
-    
+
     // Update local account model
     m_account.accessToken = accessToken;
     m_account.refreshToken = refreshToken;
     m_account.tokenExpiry = QDateTime::currentDateTimeUtc().addSecs(expiresInSecs);
-    
+
     // Update database
     AccountStore store;
     store.updateAccount(m_account);
-    
+
     emit statusChanged(QStringLiteral("Authenticating (OAuth)..."));
     m_imapClient->loginOAuth2(m_account.email, m_account.accessToken);
 }
@@ -164,6 +196,7 @@ void SyncWorker::onTokenRefreshFailed(const QString& errorMsg)
 {
     Logger::instance().error(QStringLiteral("sync"), QStringLiteral("Token refresh failed: ") + errorMsg);
     emit statusChanged(QStringLiteral("Token refresh failed"));
+    m_authFailed = true;
     m_imapClient->disconnectFromServer();
 }
 
@@ -183,10 +216,10 @@ void SyncWorker::onSettingChanged(Settings::Key key, const QVariant& value)
 void SyncWorker::onFoldersListed(const QList<Folder>& folders)
 {
     emit statusChanged(QStringLiteral("Folders synced"));
-    
+
     FolderStore store;
     bool changesMade = false;
-    
+
     for (const Folder& f : folders) {
         // Check if folder exists
         auto existingFolder = store.folderByName(m_account.id, f.name);
@@ -198,7 +231,7 @@ void SyncWorker::onFoldersListed(const QList<Folder>& folders)
             Logger::instance().info(QStringLiteral("sync"), QStringLiteral("Added folder: ") + newFolder.name);
         }
     }
-    
+
     if (changesMade) {
         emit foldersUpdated();
     }
@@ -210,68 +243,184 @@ void SyncWorker::onListFailed(const QString& reason)
     emit statusChanged(QStringLiteral("Sync failed"));
 }
 
-void SyncWorker::onFolderSelected(int /*messageCount*/)
+void SyncWorker::onFolderSelected(int /*messageCount*/, qint64 uidvalidity, qint64 uidnext)
 {
+    Q_UNUSED(uidnext)
+    if (m_currentSyncFolderId == -1) return;
+
+    FolderStore store;
+    auto optFolder = store.folderById(m_currentSyncFolderId);
+    if (optFolder.has_value()) {
+        Folder folder = *optFolder;
+        bool uidvalidityChanged = (folder.uidvalidity != 0 && folder.uidvalidity != uidvalidity);
+        if (uidvalidityChanged) {
+            Logger::instance().warning(QStringLiteral("sync"),
+                QStringLiteral("UIDVALIDITY changed for folder %1 (local: %2, server: %3). Discarding local messages.")
+                .arg(folder.name).arg(folder.uidvalidity).arg(uidvalidity));
+
+            // Delete all local messages in the folder
+            MessageStore msgStore;
+            msgStore.deleteMessagesForFolder(m_currentSyncFolderId);
+            emit messagesUpdated(m_currentSyncFolderId);
+        }
+
+        // Update local folder state
+        folder.uidvalidity = uidvalidity;
+        store.updateSyncState(folder.id, uidvalidity, folder.highestModseq);
+    }
+
     m_imapClient->searchAllUids();
 }
 
 void SyncWorker::onUidsFound(const QList<qint64>& uids)
 {
     if (m_currentSyncFolderId == -1) return;
-    
+
     MessageStore store;
     QList<Message> existing = store.messagesForFolder(m_currentSyncFolderId, 0); // get all
     QList<qint64> existingUids;
     for (const Message& m : existing) {
         existingUids.append(m.uid);
     }
-    
+
     Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("Found ") + QString::number(uids.size()) + " UIDs on server. " + QString::number(existing.size()) + " exist locally.");
-    
+
+    // Convert to QSet for O(1) lookups and O(N) total complexity
+    QSet<qint64> serverUidsSet(uids.begin(), uids.end());
+    QSet<qint64> existingUidsSet(existingUids.begin(), existingUids.end());
+
+    // Message disappearance (deleted on server)
+    QList<qint64> deletedUids;
+    for (qint64 uid : existingUids) {
+        if (uid > 0 && !serverUidsSet.contains(uid)) {
+            deletedUids.append(uid);
+        }
+    }
+
+    if (!deletedUids.isEmpty()) {
+        Logger::instance().info(QStringLiteral("sync"), QStringLiteral("Detected ") + QString::number(deletedUids.size()) + " deleted messages on server. Removing from local store...");
+        QSqlQuery del(::Database::connection());
+        del.prepare(QStringLiteral("DELETE FROM messages WHERE folder_id = :fid AND uid = :uid"));
+        for (qint64 uid : deletedUids) {
+            del.bindValue(QStringLiteral(":fid"), m_currentSyncFolderId);
+            del.bindValue(QStringLiteral(":uid"), uid);
+            del.exec();
+        }
+        // Reload existing list after deletions
+        existing = store.messagesForFolder(m_currentSyncFolderId, 0);
+        existingUids.clear();
+        for (const Message& m : existing) {
+            existingUids.append(m.uid);
+        }
+        existingUidsSet = QSet<qint64>(existingUids.begin(), existingUids.end());
+    }
+
+    // Identify missing UIDs to download
     QList<qint64> missingUids;
     for (qint64 uid : uids) {
-        if (!existingUids.contains(uid)) {
+        if (!existingUidsSet.contains(uid)) {
             missingUids.append(uid);
         }
     }
-    
-    if (missingUids.isEmpty()) {
-        Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("No new messages to download."));
+
+    // Identify common UIDs to sync flags for (up to SyncFetchLimit newest messages)
+    m_pendingFlagsToFetch.clear();
+    QList<qint64> commonUids;
+    for (qint64 uid : uids) {
+        if (existingUidsSet.contains(uid)) {
+            commonUids.append(uid);
+        }
+    }
+    std::sort(commonUids.begin(), commonUids.end());
+    int fetchLimit = Settings::instance().intValue(Settings::Key::SyncFetchLimit);
+    if (fetchLimit <= 0) fetchLimit = 100;
+    if (commonUids.size() > fetchLimit) {
+        m_pendingFlagsToFetch = commonUids.mid(commonUids.size() - fetchLimit);
+    } else {
+        m_pendingFlagsToFetch = commonUids;
+    }
+
+    if (!missingUids.isEmpty()) {
+        Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("Downloading ") + QString::number(missingUids.size()) + " missing headers...");
+        emit statusChanged(QStringLiteral("Downloading ") + QString::number(missingUids.size()) + " headers...");
+        m_imapClient->fetchMessageHeaders(missingUids);
+    } else if (!m_pendingFlagsToFetch.isEmpty()) {
+        Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("Syncing flags for ") + QString::number(m_pendingFlagsToFetch.size()) + " messages...");
+        emit statusChanged(QStringLiteral("Syncing flags..."));
+        m_imapClient->fetchMessageFlags(m_pendingFlagsToFetch);
+        m_pendingFlagsToFetch.clear();
+    } else {
+        Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("No new messages or flags to download."));
         emit statusChanged(QStringLiteral("Synced"));
         emit messagesUpdated(m_currentSyncFolderId);
-        
+
         if (!m_taskQueue.isEmpty() && m_taskQueue.head().type == ImapTask::Type::SyncFolder) {
             m_taskQueue.dequeue();
         }
         processNextTask();
-    } else {
-        Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("Downloading ") + QString::number(missingUids.size()) + " missing headers...");
-        emit statusChanged(QStringLiteral("Downloading ") + QString::number(missingUids.size()) + " headers...");
-        m_imapClient->fetchMessageHeaders(missingUids);
     }
 }
 
 void SyncWorker::onHeadersFetched(const QList<Message>& messages)
 {
     if (m_currentSyncFolderId == -1) return;
-    
+
     Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("Saving ") + QString::number(messages.size()) + " headers to database...");
     MessageStore store;
-    // Wrap inserts in a transaction for performance on older hardware
-    QSqlQuery txn(::Database::connection());
-    txn.exec(QStringLiteral("BEGIN"));
+    QSqlDatabase db = ::Database::connection();
+    bool hasTxn = db.transaction();
     for (const Message& msg : messages) {
         Message toInsert = msg;
         toInsert.folderId = m_currentSyncFolderId;
-        store.insertMessage(toInsert);
+        qint64 res = store.insertMessage(toInsert);
+        Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("Inserted message UID ") + QString::number(toInsert.uid) + " result: " + QString::number(res));
     }
-    txn.exec(QStringLiteral("COMMIT"));
-    
+    if (hasTxn) {
+        if (!db.commit()) {
+            Logger::instance().error(QStringLiteral("sync"), QStringLiteral("COMMIT transaction failed: ") + db.lastError().text());
+        }
+    }
+
     Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 7. Number inserted into SQLite: ") + QString::number(messages.size()));
     if (messages.isEmpty()) {
         Logger::instance().error(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] STOP: 0 headers inserted into SQLite!"));
     }
-    
+
+    emit messagesUpdated(m_currentSyncFolderId);
+
+    if (!m_pendingFlagsToFetch.isEmpty()) {
+        Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("Syncing flags for ") + QString::number(m_pendingFlagsToFetch.size()) + " messages...");
+        emit statusChanged(QStringLiteral("Syncing flags..."));
+        m_imapClient->fetchMessageFlags(m_pendingFlagsToFetch);
+        m_pendingFlagsToFetch.clear();
+    } else {
+        emit statusChanged(QStringLiteral("Synced"));
+        if (!m_taskQueue.isEmpty() && m_taskQueue.head().type == ImapTask::Type::SyncFolder) {
+            m_taskQueue.dequeue();
+        }
+        processNextTask();
+    }
+}
+
+void SyncWorker::onFlagsFetched(const QMap<qint64, int>& flags)
+{
+    if (m_currentSyncFolderId == -1) return;
+
+    Logger::instance().info(QStringLiteral("sync"), QStringLiteral("Updating flags for ") + QString::number(flags.size()) + " messages in folder " + QString::number(m_currentSyncFolderId));
+    MessageStore store;
+    QSqlQuery txn(::Database::connection());
+    txn.exec(QStringLiteral("BEGIN"));
+    for (auto it = flags.constBegin(); it != flags.constEnd(); ++it) {
+        qint64 uid = it.key();
+        int serverFlags = it.value();
+
+        auto optMsg = store.messageByUid(m_currentSyncFolderId, uid);
+        if (optMsg.has_value() && optMsg->flags != serverFlags) {
+            store.updateFlags(optMsg->id, serverFlags);
+        }
+    }
+    txn.exec(QStringLiteral("COMMIT"));
+
     emit statusChanged(QStringLiteral("Synced"));
     emit messagesUpdated(m_currentSyncFolderId);
 
@@ -289,10 +438,10 @@ void SyncWorker::onBodyFetched(qint64 uid, const QString& body)
     if (optMsg.has_value()) {
         msgId = optMsg->id;
     }
-    
+
     // Parse raw MIME payload
     MimeMessage mime = MimeParser::parse(body.toUtf8());
-    
+
     if (msgId != -1) {
         store.saveMessageBodies(msgId, mime.htmlBody, mime.plainBody);
         for (const auto& att : mime.attachments) {
@@ -333,6 +482,12 @@ void SyncWorker::processNextTask()
         return;
     }
 
+    if (m_imapClient->state() == ImapClient::State::Disconnected) {
+        Logger::instance().info(QStringLiteral("sync"), QStringLiteral("Task queued but client is disconnected. Initiating connection..."));
+        start();
+        return;
+    }
+
     if (!m_imapClient->isIdle()) {
         return; // Wait for current operation to finish
     }
@@ -347,7 +502,7 @@ void SyncWorker::processNextTask()
     }
 
     const ImapTask& task = m_taskQueue.head();
-    
+
     switch (task.type) {
         case ImapTask::Type::SyncFolder: {
             m_currentSyncFolderId = task.folderId;
@@ -426,10 +581,17 @@ void SyncWorker::processNextTask()
 void SyncWorker::handleTaskFailure(const QString& errorMsg)
 {
     if (m_taskQueue.isEmpty()) return;
-    
+
+    if (m_imapClient->state() == ImapClient::State::Disconnected) {
+        Logger::instance().warning(QStringLiteral("sync"),
+            QStringLiteral("Task failed due to disconnect. Keeping task in queue for retry on reconnect. Error: ") + errorMsg);
+        emit statusChanged(QStringLiteral("Offline: ") + errorMsg);
+        return;
+    }
+
     ImapTask task = m_taskQueue.dequeue();
-    Logger::instance().error(QStringLiteral("sync"), QStringLiteral("Task failed: ") + errorMsg);
-    
+    Logger::instance().error(QStringLiteral("sync"), QStringLiteral("Permanent task failed: ") + errorMsg);
+
     MessageStore store;
     if (task.type == ImapTask::Type::Delete) {
         if (m_origFlags.contains(task.messageId)) {
@@ -459,7 +621,7 @@ void SyncWorker::handleTaskFailure(const QString& errorMsg)
         del.exec();
         emit messagesUpdated(task.destFolderId);
     }
-    
+
     emit statusChanged(QStringLiteral("Error: ") + errorMsg);
     processNextTask();
 }
@@ -501,7 +663,7 @@ void SyncWorker::markMessageRead(qint64 folderId, qint64 messageId, bool read)
 
     int currentFlags = optMsg->flags;
     int newFlags = read ? (currentFlags | MessageFlags::Seen) : (currentFlags & ~MessageFlags::Seen);
-    
+
     m_origFlags[messageId] = currentFlags;
     store.updateFlags(messageId, newFlags);
     emit messagesUpdated(folderId);
@@ -524,7 +686,7 @@ void SyncWorker::starMessage(qint64 folderId, qint64 messageId, bool starred)
 
     int currentFlags = optMsg->flags;
     int newFlags = starred ? (currentFlags | MessageFlags::Flagged) : (currentFlags & ~MessageFlags::Flagged);
-    
+
     m_origFlags[messageId] = currentFlags;
     store.updateFlags(messageId, newFlags);
     emit messagesUpdated(folderId);
@@ -592,7 +754,7 @@ void SyncWorker::onFlagsStored(const QList<qint64>& uids)
     Q_UNUSED(uids)
     if (m_taskQueue.isEmpty()) return;
     ImapTask task = m_taskQueue.dequeue();
-    
+
     m_origFlags.remove(task.messageId);
 
     if (task.type == ImapTask::Type::Delete) {
@@ -600,7 +762,7 @@ void SyncWorker::onFlagsStored(const QList<qint64>& uids)
         store.deleteMessage(task.messageId);
         emit messagesUpdated(task.folderId);
     }
-    
+
     emit statusChanged(QStringLiteral("Synced"));
     processNextTask();
 }
@@ -610,13 +772,13 @@ void SyncWorker::onMessagesCopied(const QList<qint64>& uids)
     Q_UNUSED(uids)
     if (m_taskQueue.isEmpty()) return;
     ImapTask task = m_taskQueue.dequeue();
-    
+
     QSqlQuery del(::Database::connection());
     del.prepare(QStringLiteral("DELETE FROM messages WHERE folder_id = :fid AND uid = :uid"));
     del.bindValue(QStringLiteral(":fid"), task.destFolderId);
     del.bindValue(QStringLiteral(":uid"), -1 * task.messageId);
     del.exec();
-    
+
     emit statusChanged(QStringLiteral("Synced"));
     syncFolder(task.destFolderId);
     processNextTask();
@@ -627,7 +789,7 @@ void SyncWorker::onMessagesMoved(const QList<qint64>& uids)
     Q_UNUSED(uids)
     if (m_taskQueue.isEmpty()) return;
     ImapTask task = m_taskQueue.dequeue();
-    
+
     if (task.type == ImapTask::Type::Delete) {
         MessageStore store;
         store.deleteMessage(task.messageId);
@@ -636,11 +798,11 @@ void SyncWorker::onMessagesMoved(const QList<qint64>& uids)
     } else if (task.type == ImapTask::Type::Move) {
         m_origFolderIds.remove(task.messageId);
         m_origUids.remove(task.messageId);
-        
+
         MessageStore store;
         store.deleteMessage(task.messageId);
     }
-    
+
     emit statusChanged(QStringLiteral("Synced"));
     syncFolder(task.destFolderId);
     processNextTask();
@@ -650,7 +812,7 @@ void SyncWorker::onExpunged()
 {
     if (m_taskQueue.isEmpty()) return;
     ImapTask task = m_taskQueue.dequeue();
-    
+
     emit statusChanged(QStringLiteral("Synced"));
     processNextTask();
 }

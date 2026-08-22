@@ -16,6 +16,8 @@ ImapClient::ImapClient(QObject* parent)
     : QObject(parent)
 {
     m_socket = new QSslSocket(this);
+    m_timeoutTimer = new QTimer(this);
+    m_timeoutTimer->setSingleShot(true);
 
     connect(m_socket, &QSslSocket::connected, this, &ImapClient::onSocketConnected);
     connect(m_socket, &QSslSocket::encrypted, this, [this]() {
@@ -25,6 +27,7 @@ ImapClient::ImapClient(QObject* parent)
     connect(m_socket, &QSslSocket::errorOccurred, this, &ImapClient::onSocketError);
     connect(m_socket, &QSslSocket::sslErrors, this, &ImapClient::onSslErrors);
     connect(m_socket, &QSslSocket::readyRead, this, &ImapClient::onReadyRead);
+    connect(m_timeoutTimer, &QTimer::timeout, this, &ImapClient::onCommandTimeout);
 }
 
 ImapClient::~ImapClient()
@@ -42,7 +45,11 @@ void ImapClient::connectToServer(const QString& host, quint16 port)
 
     m_state = State::Connecting;
     Logger::instance().info(QStringLiteral("imap"), QStringLiteral("Connecting to ") + host + ":" + QString::number(port));
-    m_socket->connectToHostEncrypted(host, port);
+    if (host == QStringLiteral("127.0.0.1") || host == QStringLiteral("localhost")) {
+        m_socket->connectToHost(host, port);
+    } else {
+        m_socket->connectToHostEncrypted(host, port);
+    }
 }
 
 void ImapClient::disconnectFromServer()
@@ -51,6 +58,7 @@ void ImapClient::disconnectFromServer()
     if (m_socket->state() != QAbstractSocket::UnconnectedState) {
         m_socket->disconnectFromHost();
     }
+    clearParserState();
 }
 
 void ImapClient::login(const QString& username, const QString& password)
@@ -62,16 +70,16 @@ void ImapClient::login(const QString& username, const QString& password)
 
     m_state = State::Authenticating;
     m_currentTag = generateTag().toUtf8();
-    
+
     // Quote credentials securely (simplified for Phase 3C)
     // Note: Do not log the password!
     QString cmd = QStringLiteral("%1 LOGIN \"%2\" \"%3\"\r\n")
                   .arg(QString::fromUtf8(m_currentTag))
                   .arg(username)
                   .arg(password);
-                  
+
     Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending LOGIN for ") + username);
-    m_socket->write(cmd.toUtf8());
+    writeCommand(cmd.toUtf8());
 }
 
 void ImapClient::loginOAuth2(const QString& username, const QString& accessToken)
@@ -83,20 +91,20 @@ void ImapClient::loginOAuth2(const QString& username, const QString& accessToken
 
     m_state = State::Authenticating;
     m_currentTag = generateTag().toUtf8();
-    
+
     // XOAUTH2 payload: base64("user=" + username + "^Aauth=Bearer " + accessToken + "^A^A")
     // where ^A is \x01
     QString payloadStr = QStringLiteral("user=") + username + QStringLiteral("\x01") +
                          QStringLiteral("auth=Bearer ") + accessToken + QStringLiteral("\x01\x01");
-                         
+
     QByteArray payloadBase64 = payloadStr.toUtf8().toBase64();
 
     QString cmd = QStringLiteral("%1 AUTHENTICATE XOAUTH2 %2\r\n")
                   .arg(QString::fromUtf8(m_currentTag))
                   .arg(QString::fromUtf8(payloadBase64));
-                  
+
     Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending AUTHENTICATE XOAUTH2 for ") + username);
-    m_socket->write(cmd.toUtf8());
+    writeCommand(cmd.toUtf8());
 }
 
 void ImapClient::listFolders()
@@ -109,10 +117,10 @@ void ImapClient::listFolders()
     m_state = State::ListingFolders;
     m_parsedFolders.clear();
     m_currentTag = generateTag().toUtf8();
-    
+
     QByteArray cmd = m_currentTag + " LIST \"\" \"*\"\r\n";
     Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending LIST command"));
-    m_socket->write(cmd);
+    writeCommand(cmd);
 }
 
 void ImapClient::selectFolder(const QString& folderName)
@@ -120,15 +128,17 @@ void ImapClient::selectFolder(const QString& folderName)
     if (m_state == State::Disconnected) return;
     m_state = State::SelectingFolder;
     m_expectedMessageCount = 0;
+    m_uidvalidity = 0;
+    m_uidnext = 0;
     m_currentTag = generateTag().toUtf8();
-    
+
     // Escape quotes in folder name
     QString safeFolder = folderName;
     safeFolder.replace("\"", "\\\"");
-    
+
     QByteArray cmd = m_currentTag + " SELECT \"" + safeFolder.toUtf8() + "\"\r\n";
     Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 1. Selected folder: ") + safeFolder);
-    m_socket->write(cmd);
+    writeCommand(cmd);
 }
 
 void ImapClient::searchAllUids()
@@ -139,7 +149,7 @@ void ImapClient::searchAllUids()
     m_currentTag = generateTag().toUtf8();
     QByteArray cmd = m_currentTag + " UID SEARCH ALL\r\n";
     Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 2. SEARCH command sent: ") + cmd.trimmed());
-    m_socket->write(cmd);
+    writeCommand(cmd);
 }
 
 void ImapClient::fetchMessageHeaders(const QList<qint64>& uids)
@@ -150,20 +160,20 @@ void ImapClient::fetchMessageHeaders(const QList<qint64>& uids)
     }
     m_state = State::FetchingHeaders;
     m_parsedMessages.clear();
-    
+
     // Chunk UIDs according to SyncFetchLimit setting to avoid "Command line too long"
     int limit = Settings::instance().intValue(Settings::Key::SyncFetchLimit);
     if (limit <= 0) limit = 100;
     QList<qint64> chunk = uids.mid(0, limit);
-    
+
     QStringList uidStrs;
     for (qint64 u : chunk) uidStrs << QString::number(u);
     QString sequence = uidStrs.join(",");
-    
+
     m_currentTag = generateTag().toUtf8();
     QByteArray cmd = m_currentTag + " UID FETCH " + sequence.toUtf8() + " (UID ENVELOPE INTERNALDATE RFC822.SIZE FLAGS)\r\n";
     Logger::instance().debug(QStringLiteral("imap_pipeline"), QStringLiteral("[PIPELINE] 5. FETCH command sent: ") + cmd.trimmed());
-    m_socket->write(cmd);
+    writeCommand(cmd);
 }
 
 void ImapClient::fetchMessageBody(qint64 uid)
@@ -173,13 +183,57 @@ void ImapClient::fetchMessageBody(qint64 uid)
     m_currentTag = generateTag().toUtf8();
     QByteArray cmd = m_currentTag + " UID FETCH " + QByteArray::number(uid) + " (BODY.PEEK[])\r\n";
     Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending UID FETCH body command for UID ") + QString::number(uid));
-    m_socket->write(cmd);
+    writeCommand(cmd);
 }
 
 QString ImapClient::generateTag()
 {
     ++m_tagCounter;
     return QStringLiteral("A%1").arg(m_tagCounter, 4, 10, QLatin1Char('0'));
+}
+
+void ImapClient::clearParserState()
+{
+    if (m_timeoutTimer) {
+        m_timeoutTimer->stop();
+    }
+    m_buffer.clear();
+    m_currentLogicalLine.clear();
+    m_inLiteralData = false;
+    m_literalBytesExpected = 0;
+    m_expectedMessageCount = 0;
+    m_parsedUids.clear();
+    m_parsedMessages.clear();
+    m_parsedFlags.clear();
+    m_currentFetchUid = 0;
+    m_capabilities.clear();
+    m_moveFallbackStep = MoveFallbackStep::None;
+    m_pendingMoveUids.clear();
+    m_pendingMoveDest.clear();
+}
+
+void ImapClient::fetchMessageFlags(const QList<qint64>& uids)
+{
+    if (uids.isEmpty()) {
+        emit flagsFetched({});
+        return;
+    }
+    m_state = State::FetchingFlags;
+    m_parsedFlags.clear();
+
+    // Chunking to avoid command line limits
+    int limit = Settings::instance().intValue(Settings::Key::SyncFetchLimit);
+    if (limit <= 0) limit = 100;
+    QList<qint64> chunk = uids.mid(0, limit);
+
+    QStringList uidStrs;
+    for (qint64 u : chunk) uidStrs << QString::number(u);
+    QString sequence = uidStrs.join(",");
+
+    m_currentTag = generateTag().toUtf8();
+    QByteArray cmd = m_currentTag + " UID FETCH " + sequence.toUtf8() + " (UID FLAGS)\r\n";
+    Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending FETCH flags command for UIDs: ") + sequence);
+    writeCommand(cmd);
 }
 
 void ImapClient::onSocketConnected()
@@ -193,6 +247,7 @@ void ImapClient::onSocketDisconnected()
 {
     Logger::instance().info(QStringLiteral("imap"), QStringLiteral("Disconnected from IMAP server"));
     m_state = State::Disconnected;
+    clearParserState();
     emit disconnected();
 }
 
@@ -201,11 +256,12 @@ void ImapClient::onSocketError(QAbstractSocket::SocketError socketError)
     Q_UNUSED(socketError)
     QString errorMsg = m_socket->errorString();
     Logger::instance().error(QStringLiteral("imap"), QStringLiteral("Socket error: ") + errorMsg);
-    
-    if (m_state == State::Connecting) {
+
+    bool wasConnected = (m_state != State::Disconnected);
+    m_state = State::Disconnected;
+    if (wasConnected) {
         emit errorOccurred(errorMsg);
     }
-    m_state = State::Disconnected;
 }
 
 void ImapClient::onSslErrors(const QList<QSslError>& errors)
@@ -234,10 +290,10 @@ void ImapClient::onReadyRead()
         } else {
             int crlfIdx = m_buffer.indexOf("\r\n");
             if (crlfIdx == -1) break; // Need more data for a full line
-            
+
             QByteArray line = m_buffer.left(crlfIdx);
             m_buffer.remove(0, crlfIdx + 2);
-            
+
             if (line.endsWith('}')) {
                 int braceIdx = line.lastIndexOf('{');
                 if (braceIdx != -1) {
@@ -246,15 +302,15 @@ void ImapClient::onReadyRead()
                     if (ok) {
                         m_literalBytesExpected = size;
                         m_inLiteralData = true;
-                        
+
                         m_currentLogicalLine.append(line.left(braceIdx));
                         continue;
                     }
                 }
             }
-            
+
             m_currentLogicalLine.append(line);
-            
+
             processLine(m_currentLogicalLine);
             m_currentLogicalLine.clear();
         }
@@ -263,6 +319,14 @@ void ImapClient::onReadyRead()
 
 void ImapClient::processLine(const QByteArray& line)
 {
+    if (!m_currentTag.isEmpty() && (line.startsWith(m_currentTag + " OK") ||
+                                    line.startsWith(m_currentTag + " NO") ||
+                                    line.startsWith(m_currentTag + " BAD"))) {
+        if (m_timeoutTimer) {
+            m_timeoutTimer->stop();
+        }
+    }
+
     if (line.startsWith("* CAPABILITY ")) {
         QString capLine = QString::fromUtf8(line).mid(13).trimmed();
         m_capabilities = capLine.toUpper().split(' ', Qt::SkipEmptyParts);
@@ -285,7 +349,7 @@ void ImapClient::processLine(const QByteArray& line)
         handleSelectResponse(line);
     } else if (m_state == State::SearchingUids) {
         handleSearchResponse(line);
-    } else if (m_state == State::FetchingHeaders || m_state == State::FetchingBody) {
+    } else if (m_state == State::FetchingHeaders || m_state == State::FetchingBody || m_state == State::FetchingFlags) {
         handleFetchResponse(line);
     } else if (m_state == State::StoringFlags) {
         handleStoreResponse(line);
@@ -330,20 +394,20 @@ void ImapClient::handleListResponse(const QByteArray& line)
         // Example: * LIST (\HasNoChildren) "/" "INBOX"
         // Minimal parsing for Phase 3C
         QString strLine = QString::fromUtf8(line);
-        
+
         // Find the last quotes to get the folder name
         int lastQuoteIdx = strLine.lastIndexOf('"');
         if (lastQuoteIdx > 0) {
             int secondToLastQuoteIdx = strLine.lastIndexOf('"', lastQuoteIdx - 1);
             if (secondToLastQuoteIdx > 0) {
                 QString folderName = strLine.mid(secondToLastQuoteIdx + 1, lastQuoteIdx - secondToLastQuoteIdx - 1);
-                
+
                 Folder f;
                 f.name = folderName;
-                
+
                 // Extremely basic role guessing based on standard names
                 QString lowerName = folderName.toLower();
-                
+
                 if (strLine.contains(QStringLiteral("\\Noselect"), Qt::CaseInsensitive)) {
                     f.role = QStringLiteral("noselect");
                 } else if (lowerName == "inbox") f.role = "inbox";
@@ -353,7 +417,7 @@ void ImapClient::handleListResponse(const QByteArray& line)
                 else if (lowerName.contains("spam") || lowerName.contains("junk")) f.role = "spam";
                 else if (lowerName.contains("archive") || lowerName.contains("all mail")) f.role = "archive";
                 else f.role = QStringLiteral(""); // custom folder
-                
+
                 m_parsedFolders.append(f);
             }
         }
@@ -378,10 +442,27 @@ void ImapClient::handleSelectResponse(const QByteArray& line)
             if (ok) m_expectedMessageCount = count;
         }
         Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("SELECT found EXISTS: ") + QString::number(m_expectedMessageCount));
+    } else if (line.startsWith("* OK [UIDVALIDITY ")) {
+        int start = 18; // "* OK [UIDVALIDITY "
+        int end = line.indexOf(']', start);
+        if (end != -1) {
+            bool ok;
+            qint64 uv = line.mid(start, end - start).toLongLong(&ok);
+            if (ok) m_uidvalidity = uv;
+        }
+    } else if (line.startsWith("* OK [UIDNEXT ")) {
+        int start = 14; // "* OK [UIDNEXT "
+        int end = line.indexOf(']', start);
+        if (end != -1) {
+            bool ok;
+            qint64 un = line.mid(start, end - start).toLongLong(&ok);
+            if (ok) m_uidnext = un;
+        }
     } else if (line.startsWith(m_currentTag + " OK")) {
-        Logger::instance().info(QStringLiteral("imap"), QStringLiteral("SELECT succeeded. Messages: ") + QString::number(m_expectedMessageCount));
+        Logger::instance().info(QStringLiteral("imap"), QStringLiteral("SELECT succeeded. Messages: ") + QString::number(m_expectedMessageCount)
+            + ", UIDVALIDITY: " + QString::number(m_uidvalidity) + ", UIDNEXT: " + QString::number(m_uidnext));
         m_state = State::Authenticated;
-        emit folderSelected(m_expectedMessageCount);
+        emit folderSelected(m_expectedMessageCount, m_uidvalidity, m_uidnext);
     } else if (line.startsWith(m_currentTag + " NO") || line.startsWith(m_currentTag + " BAD")) {
         Logger::instance().error(QStringLiteral("imap"), QStringLiteral("SELECT failed: ") + QString::fromUtf8(line));
         m_state = State::Authenticated;
@@ -520,14 +601,14 @@ static QString formatAddressList(const SNode& listNode) {
             QString mailbox = addr.children[2].value;
             QString host = addr.children[3].value;
             if (mailbox.isEmpty()) continue;
-            
+
             QString email = mailbox;
             if (!host.isEmpty()) {
                 email += QStringLiteral("@") + host;
             }
             // Decode display name if encoded using RFC 2047
             name = MimeParser::decodeHeaderValue(name);
-            
+
             if (!name.isEmpty()) {
                 parts.append(QStringLiteral("\"%1\" <%2>").arg(name, email));
             } else {
@@ -570,7 +651,7 @@ void ImapClient::handleFetchResponse(const QByteArray& line)
     if (line.startsWith("* ") && line.contains(" FETCH ")) {
         if (m_state == State::FetchingHeaders) {
             Message msg;
-            
+
             int uidIdx = line.indexOf("UID ");
             if (uidIdx != -1) {
                 int uidEndIdx = line.indexOf(' ', uidIdx + 4);
@@ -579,7 +660,7 @@ void ImapClient::handleFetchResponse(const QByteArray& line)
                     msg.uid = line.mid(uidIdx + 4, uidEndIdx - uidIdx - 4).toLongLong();
                 }
             }
-            
+
             int sizeIdx = line.indexOf("RFC822.SIZE ");
             if (sizeIdx != -1) {
                 int sizeEndIdx = line.indexOf(' ', sizeIdx + 12);
@@ -588,7 +669,22 @@ void ImapClient::handleFetchResponse(const QByteArray& line)
                     msg.size = line.mid(sizeIdx + 12, sizeEndIdx - sizeIdx - 12).toLongLong();
                 }
             }
-            
+
+            // Parse FLAGS
+            int flagsIdx = line.indexOf("FLAGS (");
+            if (flagsIdx != -1) {
+                int flagsEndIdx = line.indexOf(')', flagsIdx + 7);
+                if (flagsEndIdx != -1) {
+                    QByteArray flagsStr = line.mid(flagsIdx + 7, flagsEndIdx - flagsIdx - 7);
+                    msg.flags = 0;
+                    if (flagsStr.contains("\\Seen")) msg.flags |= MessageFlags::Seen;
+                    if (flagsStr.contains("\\Flagged")) msg.flags |= MessageFlags::Flagged;
+                    if (flagsStr.contains("\\Answered")) msg.flags |= MessageFlags::Answered;
+                    if (flagsStr.contains("\\Deleted")) msg.flags |= MessageFlags::Deleted;
+                    if (flagsStr.contains("\\Draft")) msg.flags |= MessageFlags::Draft;
+                }
+            }
+
             int envIdx = line.indexOf("ENVELOPE (");
             if (envIdx != -1) {
                 QString envStr = QString::fromUtf8(line.mid(envIdx + 9));
@@ -606,12 +702,41 @@ void ImapClient::handleFetchResponse(const QByteArray& line)
                     msg.messageId = root.children[9].value;
                 }
             }
-            
+
             if (msg.uid > 0) {
-                Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("FETCH parsed header UID: ") + QString::number(msg.uid));
+                Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("FETCH parsed header UID: ") + QString::number(msg.uid) + ", FLAGS: " + QString::number(msg.flags));
                 m_parsedMessages.append(msg);
             } else {
                 Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("FETCH parsed header UID failed, UID was 0. Line: ") + QString::fromUtf8(line));
+            }
+        } else if (m_state == State::FetchingFlags) {
+            qint64 uid = 0;
+            int flags = 0;
+
+            int uidIdx = line.indexOf("UID ");
+            if (uidIdx != -1) {
+                int uidEndIdx = line.indexOf(' ', uidIdx + 4);
+                if (uidEndIdx == -1) uidEndIdx = line.indexOf(')', uidIdx + 4);
+                if (uidEndIdx != -1) {
+                    uid = line.mid(uidIdx + 4, uidEndIdx - uidIdx - 4).toLongLong();
+                }
+            }
+
+            int flagsIdx = line.indexOf("FLAGS (");
+            if (flagsIdx != -1) {
+                int flagsEndIdx = line.indexOf(')', flagsIdx + 7);
+                if (flagsEndIdx != -1) {
+                    QByteArray flagsStr = line.mid(flagsIdx + 7, flagsEndIdx - flagsIdx - 7);
+                    if (flagsStr.contains("\\Seen")) flags |= MessageFlags::Seen;
+                    if (flagsStr.contains("\\Flagged")) flags |= MessageFlags::Flagged;
+                    if (flagsStr.contains("\\Answered")) flags |= MessageFlags::Answered;
+                    if (flagsStr.contains("\\Deleted")) flags |= MessageFlags::Deleted;
+                    if (flagsStr.contains("\\Draft")) flags |= MessageFlags::Draft;
+                }
+            }
+
+            if (uid > 0) {
+                m_parsedFlags.insert(uid, flags);
             }
         } else if (m_state == State::FetchingBody) {
             int bodyIdx = line.indexOf("BODY");
@@ -635,6 +760,10 @@ void ImapClient::handleFetchResponse(const QByteArray& line)
             }
             m_state = State::Authenticated;
             emit headersFetched(m_parsedMessages);
+        } else if (m_state == State::FetchingFlags) {
+            Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("FETCH FLAGS succeeded. Parsed count: ") + QString::number(m_parsedFlags.size()));
+            m_state = State::Authenticated;
+            emit flagsFetched(m_parsedFlags);
         } else {
             Logger::instance().info(QStringLiteral("imap"), QStringLiteral("FETCH BODY succeeded."));
             m_state = State::Authenticated;
@@ -661,7 +790,7 @@ void ImapClient::storeFlags(const QList<qint64>& uids, const QString& flags, boo
     QString sign = add ? QStringLiteral("+") : QStringLiteral("-");
     QByteArray cmd = m_currentTag + " UID STORE " + sequence.toUtf8() + " " + sign.toUtf8() + "FLAGS (" + flags.toUtf8() + ")\r\n";
     Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending STORE: ") + cmd.trimmed());
-    m_socket->write(cmd);
+    writeCommand(cmd);
 }
 
 void ImapClient::copyMessages(const QList<qint64>& uids, const QString& destFolder)
@@ -680,7 +809,7 @@ void ImapClient::copyMessages(const QList<qint64>& uids, const QString& destFold
     safeDest.replace("\"", "\\\"");
     QByteArray cmd = m_currentTag + " UID COPY " + sequence.toUtf8() + " \"" + safeDest.toUtf8() + "\"\r\n";
     Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending COPY: ") + cmd.trimmed());
-    m_socket->write(cmd);
+    writeCommand(cmd);
 }
 
 void ImapClient::moveMessages(const QList<qint64>& uids, const QString& destFolder)
@@ -689,7 +818,7 @@ void ImapClient::moveMessages(const QList<qint64>& uids, const QString& destFold
         emit messagesMoved(uids);
         return;
     }
-    
+
     if (m_capabilities.contains(QStringLiteral("MOVE"))) {
         m_state = State::MovingMessages;
         m_parsedUids = uids;
@@ -702,13 +831,13 @@ void ImapClient::moveMessages(const QList<qint64>& uids, const QString& destFold
         safeDest.replace("\"", "\\\"");
         QByteArray cmd = m_currentTag + " UID MOVE " + sequence.toUtf8() + " \"" + safeDest.toUtf8() + "\"\r\n";
         Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending MOVE: ") + cmd.trimmed());
-        m_socket->write(cmd);
+        writeCommand(cmd);
     } else {
         Logger::instance().info(QStringLiteral("imap"), QStringLiteral("MOVE capability not supported. Using fallback COPY -> STORE +Deleted -> EXPUNGE"));
         m_moveFallbackStep = MoveFallbackStep::Copy;
         m_pendingMoveUids = uids;
         m_pendingMoveDest = destFolder;
-        
+
         copyMessages(uids, destFolder);
     }
 }
@@ -719,7 +848,7 @@ void ImapClient::expunge()
     m_currentTag = generateTag().toUtf8();
     QByteArray cmd = m_currentTag + " EXPUNGE\r\n";
     Logger::instance().debug(QStringLiteral("imap"), QStringLiteral("Sending EXPUNGE"));
-    m_socket->write(cmd);
+    writeCommand(cmd);
 }
 
 void ImapClient::handleStoreResponse(const QByteArray& line)
@@ -790,4 +919,22 @@ void ImapClient::handleExpungeResponse(const QByteArray& line)
         m_moveFallbackStep = MoveFallbackStep::None;
         emit errorOccurred(QString::fromUtf8(line));
     }
+}
+
+void ImapClient::writeCommand(const QByteArray& cmd)
+{
+    m_socket->write(cmd);
+    if (m_timeoutTimer) {
+        m_timeoutTimer->start(30000); // 30 seconds
+    }
+}
+
+void ImapClient::onCommandTimeout()
+{
+    Logger::instance().warning(QStringLiteral("imap"), QStringLiteral("Command timed out. Tag: ") + QString::fromUtf8(m_currentTag));
+    if (m_timeoutTimer) {
+        m_timeoutTimer->stop();
+    }
+    m_socket->disconnectFromHost();
+    emit errorOccurred(QStringLiteral("Command timed out"));
 }

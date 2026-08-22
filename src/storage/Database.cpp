@@ -81,7 +81,26 @@ bool Database::open(const QString& filePath)
     Logger::instance().info(QStringLiteral("db"),
         QStringLiteral("Database opened: ") + filePath);
 
-    return runMigrations();
+    if (!runMigrations()) {
+        return false;
+    }
+
+    // Startup recovery: clean up any pending optimistic messages (negative UIDs)
+    // that were interrupted by a crash or shutdown.
+    {
+        QSqlQuery q(db);
+        if (!q.exec(QStringLiteral("DELETE FROM messages WHERE uid < 0"))) {
+            Logger::instance().error(QStringLiteral("db"),
+                QStringLiteral("Failed to clean up pending optimistic messages on startup: ")
+                + q.lastError().text());
+        } else if (q.numRowsAffected() > 0) {
+            Logger::instance().info(QStringLiteral("db"),
+                QStringLiteral("Cleaned up ") + QString::number(q.numRowsAffected())
+                + QStringLiteral(" pending optimistic messages on startup."));
+        }
+    }
+
+    return true;
 }
 
 void Database::close()

@@ -74,20 +74,21 @@ private slots:
     void onLoginFailed(const QString& reason);
     void onFoldersListed(const QList<Folder>& folders);
     void onListFailed(const QString& reason);
-    
-    void onFolderSelected(int messageCount);
+
+    void onFolderSelected(int messageCount, qint64 uidvalidity, qint64 uidnext);
     void onUidsFound(const QList<qint64>& uids);
     void onHeadersFetched(const QList<Message>& messages);
+    void onFlagsFetched(const QMap<qint64, int>& flags);
     void onBodyFetched(qint64 uid, const QString& body);
 
     void onFlagsStored(const QList<qint64>& uids);
     void onMessagesCopied(const QList<qint64>& uids);
     void onMessagesMoved(const QList<qint64>& uids);
     void onExpunged();
-    
+
     void onTokenRefreshSuccessful(const QString& email, const QString& accessToken, const QString& refreshToken, int expiresInSecs);
     void onTokenRefreshFailed(const QString& errorMsg);
-    
+
     void onSettingChanged(Settings::Key key, const QVariant& value);
 
     void doSync();
@@ -101,7 +102,7 @@ private:
     ImapClient* m_imapClient = nullptr;
     GoogleOAuth* m_oauth = nullptr;
     QTimer m_syncTimer;
-    
+
     qint64 m_currentSyncFolderId = -1;
     qint64 m_currentFetchMessageId = -1;
 
@@ -109,4 +110,6 @@ private:
     QMap<qint64, qint64> m_origFolderIds;
     QMap<qint64, qint64> m_origUids;
     QMap<qint64, int> m_origFlags;
+    QList<qint64> m_pendingFlagsToFetch;
+    bool m_authFailed = false;
 };
