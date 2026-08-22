@@ -69,7 +69,9 @@ private slots:
     void onForward();
     void onAddAccount();
     void onSettings();
+    void onShortcutsSheet();
     void onAbout();
+    void onFind();
 
     void onDeleteMessage();
     void onArchiveMessage();
@@ -182,5 +184,6 @@ private:
     // -----------------------------------------------------------------------
     // Help menu
     // -----------------------------------------------------------------------
+    QAction* m_actShortcuts = nullptr;
     QAction* m_actAbout = nullptr;
 };

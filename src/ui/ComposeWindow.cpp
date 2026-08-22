@@ -4,6 +4,7 @@
 #include "core/Logger.h"
 
 #include <QAction>
+#include <QCloseEvent>
 #include <QDateTime>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -422,10 +423,52 @@ void ComposeWindow::onBodyChanged()
     m_autoSaveTimer->start(); // restarts 30-second timer on each edit
 }
 
+void ComposeWindow::closeEvent(QCloseEvent* event)
+{
+    if (m_sending) {
+        event->ignore();
+        return;
+    }
+
+    const bool hasContent = !m_toEdit->text().trimmed().isEmpty() ||
+                            !m_subjectEdit->text().trimmed().isEmpty() ||
+                            !m_bodyEdit->toPlainText().trimmed().isEmpty() ||
+                            !m_attachments.isEmpty();
+
+    if (m_draftDirty && hasContent) {
+        QMessageBox::StandardButton reply = QMessageBox::question(
+            this,
+            tr("Save Draft?"),
+            tr("Do you want to save this message as a draft before closing?"),
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+            QMessageBox::Save
+        );
+
+        if (reply == QMessageBox::Save) {
+            saveDraftNow();
+            event->accept();
+        } else if (reply == QMessageBox::Discard) {
+            if (m_draft.id != -1) {
+                DraftStore store;
+                store.deleteDraft(m_draft.id);
+            }
+            event->accept();
+        } else {
+            event->ignore();
+        }
+    } else {
+        event->accept();
+    }
+}
+
 void ComposeWindow::onAutoSave()
 {
     if (m_draftDirty && !m_sending) {
-        saveDraftNow();
+        if (saveDraftNow()) {
+            m_statusLabel->setText(tr("Draft auto-saved at %1").arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss"))));
+            m_statusLabel->show();
+            QTimer::singleShot(4000, m_statusLabel, &QLabel::hide);
+        }
     }
 }
 
@@ -509,10 +552,18 @@ void ComposeWindow::onAttachFile()
     for (const QString& file : files) {
         ComposeAttachment att;
         att.filePath = file;
-        att.filename = QFileInfo(file).fileName();
+        QFileInfo fi(file);
+        att.filename = fi.fileName();
         att.mimeType = MimeBuilder::detectMimeType(file);
         m_attachments.append(att);
-        m_attachmentList->addItem(att.filename + QStringLiteral(" (") + att.mimeType + QStringLiteral(")"));
+
+        qint64 size = fi.size();
+        QString sizeStr;
+        if (size < 1024) sizeStr = QStringLiteral("%1 B").arg(size);
+        else if (size < 1024 * 1024) sizeStr = QStringLiteral("%1 KB").arg(size / 1024);
+        else sizeStr = QStringLiteral("%1 MB").arg(QString::number(size / (1024.0 * 1024.0), 'f', 1));
+
+        m_attachmentList->addItem(QStringLiteral("%1 (%2)").arg(att.filename, sizeStr));
         onBodyChanged();
     }
 

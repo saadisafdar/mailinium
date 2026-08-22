@@ -7,6 +7,7 @@
 #include "SettingsDialog.h"
 #include "ComposeWindow.h"
 #include "DraftsDialog.h"
+#include "KeyboardShortcutsDialog.h"
 #include "../core/Logger.h"
 #include "../core/Settings.h"
 #include "../core/ThemeManager.h"
@@ -106,10 +107,11 @@ void MainWindow::setupActions()
     m_actRedo->setShortcut(QKeySequence::Redo);
     m_actRedo->setEnabled(false);
 
-    m_actFind = new QAction(tr("Find..."), this);
-    m_actFind->setShortcut(QKeySequence::Find);
+    m_actFind = new QAction(tr("Find in Folder..."), this);
+    m_actFind->setShortcuts({ QKeySequence::Find, QKeySequence(Qt::CTRL | Qt::Key_K) });
     m_actFind->setStatusTip(tr("Search your messages"));
-    m_actFind->setEnabled(false); // Phase 3H
+    m_actFind->setEnabled(true);
+    connect(m_actFind, &QAction::triggered, this, &MainWindow::onFind);
 
     m_actSelectAll = new QAction(tr("Select All"), this);
     m_actSelectAll->setShortcut(QKeySequence::SelectAll);
@@ -235,8 +237,13 @@ void MainWindow::setupActions()
 
     // --- Help ---------------------------------------------------------------
 
+    m_actShortcuts = new QAction(tr("Keyboard Shortcuts"), this);
+    m_actShortcuts->setShortcut(QKeySequence::HelpContents);
+    connect(m_actShortcuts, &QAction::triggered, this, &MainWindow::onShortcutsSheet);
+
     m_actAbout = new QAction(tr("About Mailinium"), this);
     m_actAbout->setMenuRole(QAction::AboutRole);
+    connect(m_actAbout, &QAction::triggered, this, &MainWindow::onAbout);
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +316,8 @@ void MainWindow::setupMenuBar()
 
     // Help
     QMenu* helpMenu = menuBar()->addMenu(tr("&Help"));
+    helpMenu->addAction(m_actShortcuts);
+    helpMenu->addSeparator();
     helpMenu->addAction(m_actAbout);
 }
 
@@ -654,13 +663,34 @@ void MainWindow::onSettings()
     m_settingsDialog->exec();
 }
 
+void MainWindow::onShortcutsSheet()
+{
+    KeyboardShortcutsDialog dlg(this);
+    dlg.exec();
+}
+
+void MainWindow::onFind()
+{
+    if (m_messageList) {
+        m_messageList->focusSearch();
+    }
+}
+
 void MainWindow::onAbout()
 {
     QMessageBox::about(this,
         tr("About Mailinium"),
-        tr("<b>Mailinium</b> 0.1.0<br><br>"
-           "A lightweight, native desktop email client.<br><br>"
-           "Built with Qt %1 and C++20.")
+        tr("<h2>Mailinium 0.1.0</h2>"
+           "<p>A lightweight, high-performance native desktop email client.</p>"
+           "<p><b>Architecture Highlights:</b>"
+           "<ul>"
+           "<li>Native C++20 &amp; Qt %1</li>"
+           "<li>Gmail OAuth 2.0 &amp; Standard IMAP/SMTP protocols</li>"
+           "<li>Fast local SQLite FTS5 full-text search</li>"
+           "<li>Low-RAM architecture with on-demand body streaming</li>"
+           "<li>Resilient offline caching &amp; automatic recovery</li>"
+           "</ul></p>"
+           "<p>&copy; 2026 Mailinium Contributors.</p>")
             .arg(QLatin1String(QT_VERSION_STR)));
 }
 

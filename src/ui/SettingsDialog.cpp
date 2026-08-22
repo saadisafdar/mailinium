@@ -8,6 +8,7 @@
 
 #include <QApplication>
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -389,8 +390,36 @@ QWidget* SettingsDialog::buildAdvancedTab()
         logNote->setFont(f);
     }
     loggingForm->addRow(logNote);
-
     outer->addWidget(loggingGroup);
+
+    // -- Privacy group -------------------------------------------------------
+    auto* privacyGroup = new QGroupBox(tr("Privacy & Content"), page);
+    auto* privacyForm  = new QFormLayout(privacyGroup);
+    privacyForm->setContentsMargins(12, 12, 12, 12);
+
+    auto* remoteImagesCheck = new QCheckBox(tr("Load remote images in HTML emails"), privacyGroup);
+    remoteImagesCheck->setChecked(Settings::instance().boolValue(Settings::Key::PrivacyLoadRemoteImages));
+    connect(remoteImagesCheck, &QCheckBox::toggled, this, [](bool checked) {
+        Settings::instance().setValue(Settings::Key::PrivacyLoadRemoteImages, checked);
+    });
+    privacyForm->addRow(remoteImagesCheck);
+
+    auto* privacyNote = new QLabel(
+        tr("Disabling remote images protects your IP address and prevents email tracking beacons."),
+        privacyGroup);
+    privacyNote->setWordWrap(true);
+    {
+        QPalette p = privacyNote->palette();
+        p.setColor(QPalette::WindowText,
+                   QApplication::palette().color(QPalette::Disabled, QPalette::WindowText));
+        privacyNote->setPalette(p);
+        QFont f = privacyNote->font();
+        f.setPointSizeF(f.pointSizeF() * 0.88);
+        privacyNote->setFont(f);
+    }
+    privacyForm->addRow(privacyNote);
+
+    outer->addWidget(privacyGroup);
     outer->addStretch();
 
     return page;

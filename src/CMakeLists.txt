@@ -52,6 +52,8 @@ set(MAILINIUM_SOURCES
     ui/ComposeWindow.cpp
     ui/FolderPickerDialog.h
     ui/FolderPickerDialog.cpp
+    ui/KeyboardShortcutsDialog.h
+    ui/KeyboardShortcutsDialog.cpp
 
     # protocols/
     protocols/MimeMessage.h

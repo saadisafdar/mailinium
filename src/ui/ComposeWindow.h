@@ -54,6 +54,9 @@ public:
     // Restore a previously saved draft into this window.
     void loadDraft(const Draft& draft);
 
+protected:
+    void closeEvent(QCloseEvent* event) override;
+
 private slots:
     void onSend();
     void onSaveDraft();

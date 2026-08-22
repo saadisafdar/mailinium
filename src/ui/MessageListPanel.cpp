@@ -146,6 +146,12 @@ QList<qint64> MessageListPanel::selectedMessageIds() const
     return ids;
 }
 
+void MessageListPanel::focusSearch()
+{
+    m_searchBox->setFocus();
+    m_searchBox->selectAll();
+}
+
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------

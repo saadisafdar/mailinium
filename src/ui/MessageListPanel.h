@@ -25,6 +25,9 @@ public:
     // Returns ids of all currently selected messages.
     QList<qint64> selectedMessageIds() const;
 
+    // Focuses the search box and selects all text.
+    void focusSearch();
+
 signals:
     void messageSelected(qint64 messageId);
     // Emitted when multi-selection changes (for batch action enabling)
