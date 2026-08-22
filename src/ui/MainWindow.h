@@ -15,6 +15,7 @@ class AccountSidebar;
 class MessageListPanel;
 class MessageViewPanel;
 class SettingsDialog;
+class NotificationBanner;
 
 //
 // MainWindow — the application's top-level window.
@@ -70,6 +71,9 @@ private slots:
     void onAddAccount();
     void onSettings();
     void onShortcutsSheet();
+    void onDiagnosticsReport();
+    void onExportLogs();
+    void onOpenLogDir();
     void onAbout();
     void onFind();
 
@@ -107,11 +111,12 @@ private:
     // -----------------------------------------------------------------------
     // Layout
     // -----------------------------------------------------------------------
-    QDockWidget*      m_sidebarDock   = nullptr;
-    AccountSidebar*   m_sidebar       = nullptr;
-    QSplitter*        m_splitter      = nullptr;
-    MessageListPanel* m_messageList   = nullptr;
-    MessageViewPanel* m_messageView   = nullptr;
+    QDockWidget*        m_sidebarDock        = nullptr;
+    AccountSidebar*     m_sidebar            = nullptr;
+    NotificationBanner* m_notificationBanner = nullptr;
+    QSplitter*          m_splitter           = nullptr;
+    MessageListPanel*   m_messageList        = nullptr;
+    MessageViewPanel*   m_messageView        = nullptr;
 
     // -----------------------------------------------------------------------
     // Status bar
@@ -184,6 +189,9 @@ private:
     // -----------------------------------------------------------------------
     // Help menu
     // -----------------------------------------------------------------------
-    QAction* m_actShortcuts = nullptr;
-    QAction* m_actAbout = nullptr;
+    QAction* m_actShortcuts   = nullptr;
+    QAction* m_actDiagnostics = nullptr;
+    QAction* m_actExportLogs  = nullptr;
+    QAction* m_actOpenLogDir  = nullptr;
+    QAction* m_actAbout       = nullptr;
 };

@@ -86,3 +86,5 @@ void KeyboardShortcutsDialog::addShortcutRow(QTableWidget* table, const QString&
     table->setItem(row, 1, actItem);
     table->setItem(row, 2, keyItem);
 }
+
+#include "moc_KeyboardShortcutsDialog.cpp"

@@ -3,15 +3,20 @@
 #include "../core/Settings.h"
 #include "../core/ThemeManager.h"
 #include "../core/SyncManager.h"
+#include "../core/Logger.h"
+#include "../core/DiagnosticsManager.h"
 #include "../storage/AccountStore.h"
 #include "../auth/GoogleOAuth.h"
 
 #include <QApplication>
 #include <QButtonGroup>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QUrl>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -390,6 +395,26 @@ QWidget* SettingsDialog::buildAdvancedTab()
         logNote->setFont(f);
     }
     loggingForm->addRow(logNote);
+
+    auto* logButtonsLayout = new QHBoxLayout;
+    auto* btnOpenLogs = new QPushButton(tr("Open Log Folder"), loggingGroup);
+    connect(btnOpenLogs, &QPushButton::clicked, this, []() {
+        QString dir = Logger::instance().logDir();
+        if (!dir.isEmpty()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        }
+    });
+    logButtonsLayout->addWidget(btnOpenLogs);
+
+    auto* btnExportDiag = new QPushButton(tr("Copy Diagnostics Report"), loggingGroup);
+    connect(btnExportDiag, &QPushButton::clicked, this, [this]() {
+        QString report = DiagnosticsManager::generateReport();
+        QApplication::clipboard()->setText(report);
+        QMessageBox::information(this, tr("Diagnostics Copied"), tr("System and diagnostics report copied to clipboard."));
+    });
+    logButtonsLayout->addWidget(btnExportDiag);
+    loggingForm->addRow(logButtonsLayout);
+
     outer->addWidget(loggingGroup);
 
     // -- Privacy group -------------------------------------------------------

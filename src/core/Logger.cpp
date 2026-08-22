@@ -14,8 +14,7 @@ Logger& Logger::instance()
     return s_instance;
 }
 
-Logger::Logger(QObject* parent)
-    : QObject(parent)
+Logger::Logger()
 {
 }
 
@@ -85,6 +84,54 @@ void Logger::flush()
 {
     QMutexLocker lock(&m_mutex);
     m_stream.flush();
+}
+
+QString Logger::logDir() const
+{
+    QMutexLocker lock(&m_mutex);
+    return m_logDir;
+}
+
+QStringList Logger::allLogFiles() const
+{
+    QMutexLocker lock(&m_mutex);
+    if (m_logDir.isEmpty()) return {};
+
+    QDir dir(m_logDir);
+    QStringList files = dir.entryList({ QStringLiteral("mailinium_*.log"), QStringLiteral("pipeline.log") }, QDir::Files, QDir::Name);
+    QStringList fullPaths;
+    for (const QString& f : files) {
+        fullPaths.append(dir.absoluteFilePath(f));
+    }
+    return fullPaths;
+}
+
+bool Logger::exportLogs(const QString& destinationPath)
+{
+    flush();
+
+    QFile destFile(destinationPath);
+    if (!destFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        return false;
+    }
+
+    QTextStream out(&destFile);
+    out << "======================================================================\n";
+    out << "Mailinium Application Diagnostics & Logs Export\n";
+    out << "Generated at: " << QDateTime::currentDateTime().toString(Qt::ISODate) << "\n";
+    out << "======================================================================\n\n";
+
+    QStringList files = allLogFiles();
+    for (const QString& filePath : files) {
+        QFile f(filePath);
+        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            out << "--- START LOG FILE: " << QFileInfo(filePath).fileName() << " ---\n";
+            out << f.readAll();
+            out << "\n--- END LOG FILE: " << QFileInfo(filePath).fileName() << " ---\n\n";
+        }
+    }
+
+    return true;
 }
 
 // ---------------------------------------------------------------------------

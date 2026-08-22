@@ -8,6 +8,8 @@
 #include "ComposeWindow.h"
 #include "DraftsDialog.h"
 #include "KeyboardShortcutsDialog.h"
+#include "NotificationBanner.h"
+#include "../core/DiagnosticsManager.h"
 #include "../core/Logger.h"
 #include "../core/Settings.h"
 #include "../core/ThemeManager.h"
@@ -20,8 +22,12 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QClipboard>
 #include <QCloseEvent>
+#include <QDesktopServices>
+#include <QDialogButtonBox>
 #include <QDockWidget>
+#include <QFileDialog>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
@@ -30,8 +36,10 @@
 #include <QScreen>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTextEdit>
 #include <QTimer>
 #include <QToolBar>
+#include <QVBoxLayout>
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -241,6 +249,15 @@ void MainWindow::setupActions()
     m_actShortcuts->setShortcut(QKeySequence::HelpContents);
     connect(m_actShortcuts, &QAction::triggered, this, &MainWindow::onShortcutsSheet);
 
+    m_actDiagnostics = new QAction(tr("System Diagnostics Report..."), this);
+    connect(m_actDiagnostics, &QAction::triggered, this, &MainWindow::onDiagnosticsReport);
+
+    m_actExportLogs = new QAction(tr("Export Logs..."), this);
+    connect(m_actExportLogs, &QAction::triggered, this, &MainWindow::onExportLogs);
+
+    m_actOpenLogDir = new QAction(tr("Open Log Folder"), this);
+    connect(m_actOpenLogDir, &QAction::triggered, this, &MainWindow::onOpenLogDir);
+
     m_actAbout = new QAction(tr("About Mailinium"), this);
     m_actAbout->setMenuRole(QAction::AboutRole);
     connect(m_actAbout, &QAction::triggered, this, &MainWindow::onAbout);
@@ -318,6 +335,10 @@ void MainWindow::setupMenuBar()
     QMenu* helpMenu = menuBar()->addMenu(tr("&Help"));
     helpMenu->addAction(m_actShortcuts);
     helpMenu->addSeparator();
+    helpMenu->addAction(m_actDiagnostics);
+    helpMenu->addAction(m_actExportLogs);
+    helpMenu->addAction(m_actOpenLogDir);
+    helpMenu->addSeparator();
     helpMenu->addAction(m_actAbout);
 }
 
@@ -330,39 +351,39 @@ void MainWindow::setupToolBar()
     QToolBar* toolbar = addToolBar(tr("Main Toolbar"));
     toolbar->setObjectName(QStringLiteral("mainToolbar")); // required for saveState()
     toolbar->setMovable(false);
-    toolbar->setFloatable(false);
-    toolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    toolbar->setIconSize(QSize(16, 16));
 
     toolbar->addAction(m_actNewMessage);
-    toolbar->addAction(m_actRefresh);
     toolbar->addSeparator();
     toolbar->addAction(m_actReply);
+    toolbar->addAction(m_actReplyAll);
     toolbar->addAction(m_actForward);
-    toolbar->addSeparator();
-    toolbar->addAction(m_actDrafts);
     toolbar->addSeparator();
     toolbar->addAction(m_actArchive);
     toolbar->addAction(m_actDelete);
+    toolbar->addSeparator();
+    toolbar->addAction(m_actRefresh);
 }
 
 // ---------------------------------------------------------------------------
-// Layout
+// Layout & Docking
 // ---------------------------------------------------------------------------
 
 void MainWindow::setupLayout()
 {
-    // Sidebar — in a dock widget so QMainWindow::saveState() tracks it
-    m_sidebar = new AccountSidebar(this);
-
-    m_sidebarDock = new QDockWidget(tr("Navigation"), this);
+    // Sidebar dock: accounts and folder tree
+    m_sidebarDock = new QDockWidget(tr("Mailboxes"), this);
     m_sidebarDock->setObjectName(QStringLiteral("sidebarDock")); // required for saveState()
-    m_sidebarDock->setWidget(m_sidebar);
-    m_sidebarDock->setFeatures(
-        QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable);
+    m_sidebarDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
     m_sidebarDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+
+    m_sidebar = new AccountSidebar(m_sidebarDock);
+    m_sidebarDock->setWidget(m_sidebar);
     m_sidebarDock->setMinimumWidth(180);
+
     addDockWidget(Qt::LeftDockWidgetArea, m_sidebarDock);
+
+    // Notification banner
+    m_notificationBanner = new NotificationBanner(this);
 
     // Central content: message list + message view split horizontally
     m_messageList = new MessageListPanel(this);
@@ -377,7 +398,14 @@ void MainWindow::setupLayout()
     m_splitter->setStretchFactor(1, 1); // message view: takes remaining space
     m_splitter->setSizes({340, 860});   // defaults; overridden by restoreWindowState()
 
-    setCentralWidget(m_splitter);
+    auto* centralWidget = new QWidget(this);
+    auto* centralLayout = new QVBoxLayout(centralWidget);
+    centralLayout->setContentsMargins(0, 0, 0, 0);
+    centralLayout->setSpacing(0);
+    centralLayout->addWidget(m_notificationBanner);
+    centralLayout->addWidget(m_splitter, 1);
+
+    setCentralWidget(centralWidget);
 }
 
 // ---------------------------------------------------------------------------
@@ -520,12 +548,37 @@ void MainWindow::restoreWindowState()
 void MainWindow::onSyncStatusChanged(qint64 accountId, const QString& status)
 {
     showStatusMessage(QStringLiteral("Sync: ") + status);
-    
-    // If it's a login failure or error, show a message box so the user actually sees it!
+
     if (status.contains(QStringLiteral("failed"), Qt::CaseInsensitive) || 
-        status.contains(QStringLiteral("Error"), Qt::CaseInsensitive)) {
-        QMessageBox::warning(this, tr("Synchronization Error"), 
-                             tr("Account ID %1 encountered an error:\n%2").arg(accountId).arg(status));
+        status.contains(QStringLiteral("Error"), Qt::CaseInsensitive) ||
+        status.contains(QStringLiteral("Needs Attention"), Qt::CaseInsensitive)) {
+        if (m_notificationBanner) {
+            m_notificationBanner->showNotification(
+                NotificationBanner::Type::Error,
+                tr("Account %1 sync error: %2").arg(accountId).arg(status),
+                tr("Re-authenticate"),
+                [accountId]() {
+                    SyncManager::instance().reauthenticateAccount(accountId);
+                }
+            );
+        }
+    } else if (status.contains(QStringLiteral("Offline"), Qt::CaseInsensitive)) {
+        if (m_notificationBanner) {
+            m_notificationBanner->showNotification(
+                NotificationBanner::Type::Warning,
+                tr("Network offline — displaying cached emails."),
+                tr("Retry"),
+                [accountId]() {
+                    SyncManager::instance().reauthenticateAccount(accountId);
+                },
+                8000
+            );
+        }
+    } else if (status.contains(QStringLiteral("Synced"), Qt::CaseInsensitive) ||
+               status.contains(QStringLiteral("Idle"), Qt::CaseInsensitive)) {
+        if (m_notificationBanner) {
+            m_notificationBanner->dismiss();
+        }
     }
 }
 
@@ -667,6 +720,71 @@ void MainWindow::onShortcutsSheet()
 {
     KeyboardShortcutsDialog dlg(this);
     dlg.exec();
+}
+
+void MainWindow::onDiagnosticsReport()
+{
+    QString report = DiagnosticsManager::generateReport();
+    auto* dlg = new QDialog(this);
+    dlg->setWindowTitle(tr("System Diagnostics & Health Report"));
+    dlg->resize(680, 520);
+
+    auto* layout = new QVBoxLayout(dlg);
+    layout->setContentsMargins(16, 16, 16, 16);
+    layout->setSpacing(12);
+
+    auto* titleLabel = new QLabel(tr("<h3>System Diagnostics Report</h3>"), dlg);
+    layout->addWidget(titleLabel);
+
+    auto* textEdit = new QTextEdit(dlg);
+    textEdit->setReadOnly(true);
+    textEdit->setFontFamily(QStringLiteral("Consolas, monospace"));
+    textEdit->setPlainText(report);
+    layout->addWidget(textEdit, 1);
+
+    auto* btnBox = new QDialogButtonBox(dlg);
+    auto* btnCopy = btnBox->addButton(tr("Copy to Clipboard"), QDialogButtonBox::ActionRole);
+    auto* btnClose = btnBox->addButton(QDialogButtonBox::Close);
+
+    connect(btnCopy, &QPushButton::clicked, this, [report, this]() {
+        QApplication::clipboard()->setText(report);
+        QMessageBox::information(this, tr("Copied"), tr("Diagnostics report copied to clipboard."));
+    });
+    connect(btnClose, &QPushButton::clicked, dlg, &QDialog::accept);
+
+    layout->addWidget(btnBox);
+    dlg->exec();
+    dlg->deleteLater();
+}
+
+void MainWindow::onExportLogs()
+{
+    QString defaultName = QStringLiteral("mailinium_logs_%1.txt")
+        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss")));
+    QString target = QFileDialog::getSaveFileName(
+        this,
+        tr("Export Application Logs"),
+        defaultName,
+        tr("Text Files (*.txt);;All Files (*)")
+    );
+
+    if (!target.isEmpty()) {
+        if (Logger::instance().exportLogs(target)) {
+            QMessageBox::information(this, tr("Logs Exported"),
+                tr("Application logs successfully exported to:\n%1").arg(target));
+        } else {
+            QMessageBox::warning(this, tr("Export Failed"),
+                tr("Failed to export logs to the specified file."));
+        }
+    }
+}
+
+void MainWindow::onOpenLogDir()
+{
+    QString dir = Logger::instance().logDir();
+    if (!dir.isEmpty()) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    }
 }
 
 void MainWindow::onFind()
@@ -1004,3 +1122,5 @@ void MainWindow::closeEvent(QCloseEvent* event)
     Logger::instance().info(QStringLiteral("ui"), QStringLiteral("Main window closing"));
     event->accept();
 }
+
+#include "moc_MainWindow.cpp"

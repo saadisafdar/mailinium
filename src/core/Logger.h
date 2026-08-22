@@ -19,10 +19,8 @@
 // PII policy: never log full email addresses or any secret material.
 // Rotate: up to MaxFiles files of MaxFileSizeBytes each.
 //
-class Logger : public QObject
+class Logger
 {
-    Q_OBJECT
-
 public:
     enum class Level {
         Debug   = 0,
@@ -48,9 +46,14 @@ public:
     // Flush all pending writes. Called on application shutdown.
     void flush();
 
+    // Log inspection & export
+    QString logDir() const;
+    QStringList allLogFiles() const;
+    bool exportLogs(const QString& destinationPath);
+
 private:
-    explicit Logger(QObject* parent = nullptr);
-    ~Logger() override;
+    Logger();
+    ~Logger();
 
     void log(Level level, const QString& module, const QString& message);
     void rotateIfNeeded();

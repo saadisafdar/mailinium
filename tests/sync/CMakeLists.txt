@@ -41,3 +41,17 @@ mailinium_add_test(
     SOURCES PerformanceTest.cpp ${SYNC_SOURCES}
     LINKS Qt6::Sql Qt6::Network Qt6::Widgets
 )
+
+set(OBS_SOURCES
+    ${SYNC_SOURCES}
+    "${CMAKE_SOURCE_DIR}/src/core/DiagnosticsManager.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/ThemeManager.cpp"
+    "${CMAKE_SOURCE_DIR}/src/ui/NotificationBanner.cpp"
+    "${CMAKE_SOURCE_DIR}/src/storage/DraftStore.cpp"
+)
+
+mailinium_add_test(
+    NAME ObservabilityTest
+    SOURCES ObservabilityTest.cpp ${OBS_SOURCES}
+    LINKS Qt6::Sql Qt6::Network Qt6::Widgets
+)

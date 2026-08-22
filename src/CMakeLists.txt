@@ -28,10 +28,14 @@ set(MAILINIUM_SOURCES
     core/SyncWorker.cpp
     core/SmtpSendJob.h
     core/SmtpSendJob.cpp
+    core/DiagnosticsManager.h
+    core/DiagnosticsManager.cpp
 
     # ui/
     ui/MainWindow.h
     ui/MainWindow.cpp
+    ui/NotificationBanner.h
+    ui/NotificationBanner.cpp
     ui/AccountSidebar.h
     ui/AccountSidebar.cpp
     ui/AccountSetupWizard.h
