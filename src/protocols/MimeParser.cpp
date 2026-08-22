@@ -174,9 +174,24 @@ static void parsePart(const QByteArray& fullData, int start, int end, MimeMessag
 
     if (headerEndPos > headerStart) {
         QString headerStr = QString::fromUtf8(fullData.constData() + headerStart, headerEndPos - headerStart);
-        headerStr.replace(QRegularExpression(QStringLiteral("\r?\n[ \t]")), QStringLiteral(" "));
+        QStringList rawLines = headerStr.split(QLatin1Char('\n'));
+        QStringList lines;
+        lines.reserve(rawLines.size());
 
-        QStringList lines = headerStr.split(QRegularExpression(QStringLiteral("\r?\n")));
+        for (const QString& rawLine : rawLines) {
+            QString trimmedLine = rawLine;
+            if (trimmedLine.endsWith(QLatin1Char('\r'))) {
+                trimmedLine.chop(1);
+            }
+            if (trimmedLine.isEmpty()) continue;
+
+            if ((trimmedLine.startsWith(QLatin1Char(' ')) || trimmedLine.startsWith(QLatin1Char('\t'))) && !lines.isEmpty()) {
+                lines.last() += QLatin1Char(' ') + trimmedLine.trimmed();
+            } else {
+                lines.append(trimmedLine);
+            }
+        }
+
         for (const QString& line : lines) {
             int colonIdx = line.indexOf(':');
             if (colonIdx == -1) continue;
@@ -217,8 +232,14 @@ static void parsePart(const QByteArray& fullData, int start, int end, MimeMessag
         QString headerStr = QString::fromUtf8(fullData.constData() + headerStart, headerEndPos - headerStart);
         int boundaryIdx = headerStr.indexOf(QStringLiteral("boundary="), 0, Qt::CaseInsensitive);
         if (boundaryIdx != -1) {
-            int endIdx = headerStr.indexOf(QRegularExpression(QStringLiteral("[\r\n;]")), boundaryIdx);
-            if (endIdx == -1) endIdx = headerStr.length();
+            int endIdx = headerStr.length();
+            for (int i = boundaryIdx + 9; i < headerStr.length(); ++i) {
+                QChar c = headerStr.at(i);
+                if (c == ';' || c == '\r' || c == '\n') {
+                    endIdx = i;
+                    break;
+                }
+            }
             QString boundary = headerStr.mid(boundaryIdx + 9, endIdx - (boundaryIdx + 9)).trimmed().remove('"');
 
             QByteArray boundaryDelimiter = "--" + boundary.toUtf8();

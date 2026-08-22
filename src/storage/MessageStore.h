@@ -29,6 +29,10 @@ public:
     // already exists — duplicate delivery is not an error.
     qint64 insertMessage(const Message& msg);
 
+    // Batch insert message envelopes using prepared statement reuse.
+    // Returns a list of assigned IDs corresponding to each input message.
+    QList<qint64> insertMessages(const QList<Message>& messages);
+
     // Update the flags bitmask for a single message.
     bool updateFlags(qint64 messageId, int flags);
 

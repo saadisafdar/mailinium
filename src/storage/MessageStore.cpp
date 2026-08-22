@@ -105,6 +105,67 @@ qint64 MessageStore::insertMessage(const Message& msg)
     return sel.value(0).toLongLong();
 }
 
+QList<qint64> MessageStore::insertMessages(const QList<Message>& messages)
+{
+    if (messages.isEmpty()) return {};
+
+    QSqlQuery ins(Database::connection());
+    ins.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO messages"
+        "    (folder_id, uid, message_id, thread_id,"
+        "     subject, from_address, from_name, date_utc,"
+        "     flags, size, body_fetched, to_list, cc_list, bcc_list, reply_to)"
+        "    VALUES(:folderId, :uid, :messageId, :threadId,"
+        "           :subject, :fromAddress, :fromName, :dateUtc,"
+        "           :flags, :size, :bodyFetched, :toList, :ccList, :bccList, :replyTo)"
+    ));
+
+    QSqlQuery sel(Database::connection());
+    sel.prepare(QStringLiteral(
+        "SELECT id FROM messages WHERE folder_id = :fid AND uid = :uid"));
+
+    QList<qint64> ids;
+    ids.reserve(messages.size());
+
+    for (const Message& msg : messages) {
+        ins.bindValue(QStringLiteral(":folderId"),    msg.folderId);
+        ins.bindValue(QStringLiteral(":uid"),         msg.uid);
+        ins.bindValue(QStringLiteral(":messageId"),   msg.messageId.isNull() ? QStringLiteral("") : msg.messageId);
+        ins.bindValue(QStringLiteral(":threadId"),    msg.threadId);
+        ins.bindValue(QStringLiteral(":subject"),     msg.subject.isNull() ? QStringLiteral("") : msg.subject);
+        ins.bindValue(QStringLiteral(":fromAddress"), msg.fromAddress.isNull() ? QStringLiteral("") : msg.fromAddress);
+        ins.bindValue(QStringLiteral(":fromName"),    msg.fromName.isNull() ? QStringLiteral("") : msg.fromName);
+        ins.bindValue(QStringLiteral(":dateUtc"),
+            msg.date.isValid()
+                ? msg.date.toTimeZone(QTimeZone::UTC).toString(Qt::ISODate)
+                : QStringLiteral(""));
+        ins.bindValue(QStringLiteral(":flags"),       msg.flags);
+        ins.bindValue(QStringLiteral(":size"),        msg.size);
+        ins.bindValue(QStringLiteral(":bodyFetched"), msg.bodyFetched ? 1 : 0);
+        ins.bindValue(QStringLiteral(":toList"),      msg.toList.isNull() ? QStringLiteral("") : msg.toList);
+        ins.bindValue(QStringLiteral(":ccList"),      msg.ccList.isNull() ? QStringLiteral("") : msg.ccList);
+        ins.bindValue(QStringLiteral(":bccList"),     msg.bccList.isNull() ? QStringLiteral("") : msg.bccList);
+        ins.bindValue(QStringLiteral(":replyTo"),     msg.replyTo.isNull() ? QStringLiteral("") : msg.replyTo);
+
+        if (!ins.exec()) {
+            Logger::instance().error(QStringLiteral("storage"),
+                QStringLiteral("insertMessages failed: ") + ins.lastError().text());
+            ids.append(-1);
+            continue;
+        }
+
+        sel.bindValue(QStringLiteral(":fid"), msg.folderId);
+        sel.bindValue(QStringLiteral(":uid"), msg.uid);
+        if (sel.exec() && sel.next()) {
+            ids.append(sel.value(0).toLongLong());
+        } else {
+            ids.append(-1);
+        }
+    }
+
+    return ids;
+}
+
 // ---------------------------------------------------------------------------
 // Updates
 // ---------------------------------------------------------------------------

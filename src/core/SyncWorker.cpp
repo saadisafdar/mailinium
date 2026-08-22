@@ -390,15 +390,19 @@ void SyncWorker::onHeadersFetched(const QList<Message>& messages)
     if (m_currentSyncFolderId == -1) return;
 
     Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("Saving ") + QString::number(messages.size()) + " headers to database...");
+    
+    QList<Message> toInsertList;
+    toInsertList.reserve(messages.size());
+    for (const Message& msg : messages) {
+        Message m = msg;
+        m.folderId = m_currentSyncFolderId;
+        toInsertList.append(m);
+    }
+
     MessageStore store;
     QSqlDatabase db = ::Database::connection();
     bool hasTxn = db.transaction();
-    for (const Message& msg : messages) {
-        Message toInsert = msg;
-        toInsert.folderId = m_currentSyncFolderId;
-        qint64 res = store.insertMessage(toInsert);
-        Logger::instance().debug(QStringLiteral("sync"), QStringLiteral("Inserted message UID ") + QString::number(toInsert.uid) + " result: " + QString::number(res));
-    }
+    store.insertMessages(toInsertList);
     if (hasTxn) {
         if (!db.commit()) {
             Logger::instance().error(QStringLiteral("sync"), QStringLiteral("COMMIT transaction failed: ") + db.lastError().text());

@@ -35,3 +35,9 @@ mailinium_add_test(
     SOURCES AccountAuthTest.cpp ${SYNC_SOURCES}
     LINKS Qt6::Sql Qt6::Network Qt6::Widgets
 )
+
+mailinium_add_test(
+    NAME PerformanceTest
+    SOURCES PerformanceTest.cpp ${SYNC_SOURCES}
+    LINKS Qt6::Sql Qt6::Network Qt6::Widgets
+)
