@@ -51,3 +51,17 @@ add_subdirectory(src)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+
+# ---------------------------------------------------------------------------
+# CPack Packaging
+# ---------------------------------------------------------------------------
+set(CPACK_PACKAGE_NAME "Mailinium")
+set(CPACK_PACKAGE_VENDOR "Mailinium Contributors")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A lightweight, native desktop email client")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "Mailinium")
+set(CPACK_GENERATOR "ZIP")
+if(WIN32)
+    list(APPEND CPACK_GENERATOR "NSIS")
+endif()
+include(CPack)

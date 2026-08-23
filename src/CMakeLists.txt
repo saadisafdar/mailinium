@@ -105,6 +105,7 @@ if(WIN32)
     add_executable(Mailinium WIN32
         ${MAILINIUM_SOURCES}
         ${MAILINIUM_RESOURCES}
+        mailinium.rc
     )
 elseif(APPLE)
     add_executable(Mailinium MACOSX_BUNDLE
@@ -147,6 +148,14 @@ mailinium_set_target_options(Mailinium)
 
 # ---------------------------------------------------------------------------
 # Windows: Qt deployment helper
-# Copies Qt DLLs next to the executable after build (debug only)
+# Copies Qt DLLs next to the executable after build
 # ---------------------------------------------------------------------------
 mailinium_deploy_qt_executable(Mailinium)
+
+# ---------------------------------------------------------------------------
+# Install rules
+# ---------------------------------------------------------------------------
+install(TARGETS Mailinium
+    RUNTIME DESTINATION bin
+    BUNDLE DESTINATION .
+)
