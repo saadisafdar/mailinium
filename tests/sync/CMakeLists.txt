@@ -55,3 +55,9 @@ mailinium_add_test(
     SOURCES ObservabilityTest.cpp ${OBS_SOURCES}
     LINKS Qt6::Sql Qt6::Network Qt6::Widgets
 )
+
+mailinium_add_test(
+    NAME ReleaseValidationTest
+    SOURCES ReleaseValidationTest.cpp ${OBS_SOURCES}
+    LINKS Qt6::Sql Qt6::Network Qt6::Widgets
+)
